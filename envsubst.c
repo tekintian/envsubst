@@ -80,6 +80,18 @@ normalize_variable(const char *var, bool require_sigil)
 	return scratch;
 }
 
+void *
+reallocarray (void *optr, size_t nmemb, size_t elem_size)
+{
+  size_t bytes;
+  if (__builtin_mul_overflow (nmemb, elem_size, &bytes))
+    {
+      fprintf(stderr, "Cannot allocate memory: %s\n", strerror(errno));
+      return 0;
+    }
+  return realloc (optr, bytes);
+}
+
 void
 push_variable(const char *var)
 {
