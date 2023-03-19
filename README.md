@@ -1,5 +1,17 @@
-# envsubst
-linux envsubst
+# envsubst 
+
+解决最新版glibc 2.29库依赖问题
+
+## envsubst alpine docker images
+
+
+简单使用方法
+~~~sh
+docker run -e APP_NAME="My Alpine Envsubst Test app" tekintian/alpine-envsubst /tmp/test.txt
+~~~
+
+更多详情 https://hub.docker.com/r/tekintian/alpine-envsubst
+
 
 ## envsubst 命令详解
 
