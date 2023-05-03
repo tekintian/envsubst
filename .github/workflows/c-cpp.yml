@@ -16,6 +16,6 @@ jobs:
     - name: make
       run: |
         mkdir -p /usr/local/bin
-        make install
+        make && make install
     - name: make distcheck
       run: make distcheck
