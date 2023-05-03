@@ -15,6 +15,7 @@ jobs:
     - uses: actions/checkout@v3
     - name: make
       run: |
-        apt-get install -y g++ gcc libc-dev make
+        sudo apt-get install -y g++ gcc libc-dev make
         make
+        make install
 
