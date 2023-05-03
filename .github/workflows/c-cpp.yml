@@ -14,6 +14,8 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: make
-      run: make install
+      run: |
+        mkdir -p /usr/local/bin
+        make install
     - name: make distcheck
       run: make distcheck
