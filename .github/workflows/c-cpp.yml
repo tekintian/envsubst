@@ -1,21 +1,61 @@
-name: C/C++ CI
+name: Build & Release
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    tags:
+      - 'v*'
 
 jobs:
-  build:
-
+  build-linux:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    - name: make
-      run: |
-        sudo apt-get install -y g++ gcc libc-dev make
-        make
-        make install
+      - uses: actions/checkout@v4
 
+      - name: Build Linux glibc
+        run: |
+          gcc -O2 -Wall -Wextra -std=c99 -pedantic envsubst.c -o envsubst-linux-amd64
+          chmod +x envsubst-linux-amd64
+
+      - name: Upload Linux Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-linux-amd64
+          path: envsubst-linux-amd64
+
+  build-alpine:
+    runs-on: ubuntu-latest
+    container: alpine:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: apk add --no-cache gcc musl-dev make
+
+      - name: Build Alpine static
+        run: |
+          gcc -O2 -Wall -Wextra -std=c99 -pedantic -static envsubst.c -o envsubst-alpine-amd64
+          chmod +x envsubst-alpine-amd64
+
+      - name: Upload Alpine Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-alpine-amd64
+          path: envsubst-alpine-amd64
+
+  release:
+    needs: [build-linux, build-alpine]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            envsubst-linux-amd64/envsubst-linux-amd64
+            envsubst-alpine-amd64/envsubst-alpine-amd64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
