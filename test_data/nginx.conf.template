@@ -1,0 +1,142 @@
+# nginx.conf  --  docker-openresty
+#
+# This file is installed to:
+#   `/usr/local/openresty/nginx/conf/nginx.conf`
+# and is the file loaded by nginx at startup,
+# unless the user specifies otherwise.
+#
+# It tracks the upstream OpenResty's `nginx.conf`, but removes the `server`
+# section and adds this directive:
+#     `include /etc/nginx/conf.d/*.conf;`
+#
+# The `docker-openresty` file `nginx.vh.default.conf` is copied to
+# `/etc/nginx/conf.d/default.conf`.  It contains the `server section
+# of the upstream `nginx.conf`.
+#
+# {PATH}
+# 
+# ${GOPATH%$|#@}
+# ${ABCD:-9999999}
+
+#user  nobody;
+#worker_processes 1;
+
+# Enables the use of JIT for regular expressions to speed-up their processing.
+pcre_jit on;
+
+
+
+#error_log  logs/error.log;
+#error_log  logs/error.log  notice;
+#error_log  logs/error.log  info;
+
+#pid        logs/nginx.pid;
+
+
+events {
+    worker_connections  1024;
+}
+
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    # Enables or disables the use of underscores in client request header fields.
+    # When the use of underscores is disabled, request header fields whose names contain underscores are marked as invalid and become subject to the ignore_invalid_headers directive.
+    # underscores_in_headers off;
+
+    #log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+    #                  '$status $body_bytes_sent "$http_referer" '
+    #                  '"$http_user_agent" "$http_x_forwarded_for"';
+
+    #access_log  logs/access.log  main;
+
+        # Log in JSON Format
+        # log_format nginxlog_json escape=json '{ "timestamp": "$time_iso8601", '
+        # '"remote_addr": "$remote_addr", '
+        #  '"body_bytes_sent": $body_bytes_sent, '
+        #  '"request_time": $request_time, '
+        #  '"response_status": $status, '
+        #  '"request": "$request", '
+        #  '"request_method": "$request_method", '
+        #  '"host": "$host",'
+        #  '"upstream_addr": "$upstream_addr",'
+        #  '"http_x_forwarded_for": "$http_x_forwarded_for",'
+        #  '"http_referrer": "$http_referer", '
+        #  '"http_user_agent": "$http_user_agent", '
+        #  '"http_version": "$server_protocol", '
+        #  '"nginx_access": true }';
+        # access_log /dev/stdout nginxlog_json;
+
+    # See Move default writable paths to a dedicated directory (#119)
+    # https://github.com/openresty/docker-openresty/issues/119
+    client_body_temp_path /var/run/openresty/nginx-client-body;
+    proxy_temp_path       /var/run/openresty/nginx-proxy;
+    fastcgi_temp_path     /var/run/openresty/nginx-fastcgi;
+    uwsgi_temp_path       /var/run/openresty/nginx-uwsgi;
+    scgi_temp_path        /var/run/openresty/nginx-scgi;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    #keepalive_timeout  0;
+    keepalive_timeout  65;
+
+    # brotli status on / off
+    brotli ${REST_BROTLI_STATUS};
+    brotli_comp_level ${REST_BROTLI_COMP_LEVEL};  # 压缩级别 1-11，推荐 4-6
+    brotli_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    # Gzip status on / off
+    gzip ${REST_GZIP_STATUS};
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    # === MyPanel WAF Configuration ===
+    # Note: Cache size is set during container startup via entrypoint script
+    # Default: 5m (suitable for <100 sites)
+    lua_shared_dict waf_cache ${WAF_CACHE_SIZE};  # WAF 配置与状态缓存
+
+    # WAF 管理 API Server (仅内部访问)
+    server {
+        listen ${WAF_API_LISTEN};  # 仅监听本地
+        server_name ${WAF_API_SERVER_NAME};
+
+        # 配置同步 API
+        location /waf/config/sync {
+            content_by_lua_block {
+                local config_sync = require "waf.config_sync"
+                config_sync.sync_config()
+            }
+        }
+
+        # 清除缓存 API
+        location /waf/config/clear {
+            content_by_lua_block {
+                local config_sync = require "waf.config_sync"
+                config_sync.clear_cache()
+            }
+        }
+
+        # WAF 健康检查
+        location /waf/health {
+            content_by_lua_block {
+                local cjson = require "cjson"
+                local cache = ngx.shared.waf_cache
+                local used = cache:capacity() - cache:free_space()
+                ngx.say(cjson.encode({
+                    status = "ok",
+                    cache_used = used,
+                    cache_free = cache:free_space(),
+                    cache_capacity = cache:capacity(),
+                    uptime = ngx.now()
+                }))
+            }
+        }
+    }
+
+    include /etc/nginx/conf.d/*.conf;
+
+    # Don't reveal OpenResty version to clients.
+    # server_tokens off;
+}

@@ -17,13 +17,21 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ENVSUBST_VERSION "1.0.0-tekin"
+#ifndef ENVSUBST_VERSION
+#define ENVSUBST_VERSION "v1.0.0"
+#endif
 
 struct envsubst_ctx {
     char** allowed_vars;
     size_t var_count;
     bool keep_undefined;
     bool replace_all;
+    bool debug_mode;      // 调试模式
+    bool stats_mode;      // 统计模式
+    bool json_stats;      // JSON 格式统计
+    size_t replaced_count;   // 已替换的变量数
+    size_t kept_count;       // 保留的未定义变量数
+    size_t skipped_count;    // 跳过的变量数（不在白名单中）
 };
 
 struct pattern {
@@ -52,6 +60,10 @@ static void usage(void) {
     printf("  -v, --variables         列出允许替换的变量/通配符并退出\n");
     printf("  -k, --keep-undefined    变量未定义时保留原字符串，不删除\n");
     printf("      --all               启用全替换模式：替换 $VAR 和 ${VAR}\n");
+    printf("      --debug             调试模式：显示每个变量的替换过程\n");
+    printf("      --stats             统计模式：显示替换统计信息\n");
+    printf("      --json-stats        JSON 格式统计信息（便于机器解析）\n");
+    printf("      --whitelist-file F  从文件 F 读取白名单规则（每行一个）\n");
     printf("\n");
     printf("【通配符支持】\n");
     printf("  前缀匹配：REST_*        匹配 REST_HOST、REST_PORT、REST_TOKEN\n");
@@ -200,12 +212,44 @@ static void ctx_init(struct envsubst_ctx* ctx) {
     ctx->var_count = 0;
     ctx->keep_undefined = false;
     ctx->replace_all = false;
+    ctx->debug_mode = false;
+    ctx->stats_mode = false;
+    ctx->json_stats = false;
+    ctx->replaced_count = 0;
+    ctx->kept_count = 0;
+    ctx->skipped_count = 0;
 }
 
 static void ctx_free(struct envsubst_ctx* ctx) {
     for (size_t i = 0; i < ctx->var_count; i++)
         free(ctx->allowed_vars[i]);
     free(ctx->allowed_vars);
+}
+
+static void print_stats(struct envsubst_ctx* ctx) {
+    if (!ctx->stats_mode && !ctx->json_stats) return;
+    
+    if (ctx->json_stats) {
+        // JSON format for machine parsing
+        fprintf(stderr, "\n{\n");
+        fprintf(stderr, "  \"envsubst_stats\": {\n");
+        fprintf(stderr, "    \"variables_replaced\": %zu,\n", ctx->replaced_count);
+        fprintf(stderr, "    \"variables_kept\": %zu,\n", ctx->kept_count);
+        fprintf(stderr, "    \"variables_skipped\": %zu,\n", ctx->skipped_count);
+        fprintf(stderr, "    \"total_processed\": %zu\n", 
+                ctx->replaced_count + ctx->kept_count + ctx->skipped_count);
+        fprintf(stderr, "  }\n");
+        fprintf(stderr, "}\n");
+    } else {
+        // Human-readable format
+        fprintf(stderr, "\n=== envsubst Statistics ===\n");
+        fprintf(stderr, "Variables replaced:    %zu\n", ctx->replaced_count);
+        fprintf(stderr, "Variables kept:        %zu\n", ctx->kept_count);
+        fprintf(stderr, "Variables skipped:     %zu\n", ctx->skipped_count);
+        fprintf(stderr, "Total processed:       %zu\n", 
+                ctx->replaced_count + ctx->kept_count + ctx->skipped_count);
+        fprintf(stderr, "========================\n");
+    }
 }
 
 static int ctx_add(struct envsubst_ctx* ctx, const char* s) {
@@ -226,14 +270,78 @@ static void parse_arg(struct envsubst_ctx* ctx, const char* arg) {
     free(buf);
 }
 
+static int load_whitelist_file(struct envsubst_ctx* ctx, const char* filename) {
+    FILE* fp = fopen(filename, "r");
+    if (!fp) {
+        fprintf(stderr, "Error: Cannot open whitelist file '%s': %s\n", 
+                filename, strerror(errno));
+        return -1;
+    }
+    
+    char* line = NULL;
+    size_t len = 0;
+    ssize_t nread;
+    int count = 0;
+    
+    while ((nread = getline(&line, &len, fp)) != -1) {
+        // Remove trailing newline/carriage return
+        while (nread > 0 && (line[nread-1] == '\n' || line[nread-1] == '\r')) {
+            line[--nread] = 0;
+        }
+        
+        // Skip empty lines and comments
+        if (nread == 0 || line[0] == '#') continue;
+        
+        // Trim leading whitespace
+        char* trimmed = line;
+        while (*trimmed && isspace((unsigned char)*trimmed)) trimmed++;
+        
+        if (*trimmed) {
+            if (ctx_add(ctx, trimmed) == 0) {
+                count++;
+            }
+        }
+    }
+    
+    free(line);
+    fclose(fp);
+    
+    if (ctx->debug_mode) {
+        fprintf(stderr, "[DEBUG] Loaded %d rules from '%s'\n", count, filename);
+    }
+    
+    return count;
+}
+
 static void output(FILE* out, struct envsubst_ctx* ctx, const char* var, const char* orig) {
     if (!ctx_allow(ctx, var)) {
+        if (ctx->debug_mode) {
+            fprintf(stderr, "[DEBUG] Skip (not in whitelist): %s\n", orig);
+        }
+        ctx->skipped_count++;
         fputs(orig, out);
         return;
     }
     const char* val = getenv(var);
-    if (val) fputs(val, out);
-    else if (ctx->keep_undefined) fputs(orig, out);
+    if (val) {
+        if (ctx->debug_mode) {
+            fprintf(stderr, "[DEBUG] Replace: %s -> %s\n", orig, val);
+        }
+        ctx->replaced_count++;
+        fputs(val, out);
+    } else if (ctx->keep_undefined) {
+        if (ctx->debug_mode) {
+            fprintf(stderr, "[DEBUG] Keep undefined: %s\n", orig);
+        }
+        ctx->kept_count++;
+        fputs(orig, out);
+    } else {
+        // Variable is undefined and not kept - output empty string
+        if (ctx->debug_mode) {
+            fprintf(stderr, "[DEBUG] Remove undefined: %s\n", orig);
+        }
+        ctx->replaced_count++;  // Count as processed
+    }
 }
 
 static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
@@ -248,18 +356,59 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
     // Calculate the length of the full ${VAR} expression
     size_t expr_len = end - start + 1;
     
-    // Extract variable name (skip "${" prefix)
-    const char* var_name = start + 2;
-    size_t var_len = end - start - 2;
+    // Extract content between ${ and }
+    const char* content = start + 2;
+    size_t content_len = end - start - 2;
+    
+    // Check for default value syntax ${VAR:-default}
+    char* var_name = NULL;
+    char* default_value = NULL;
+    size_t var_len = 0;
+    
+    // Look for :- pattern
+    char* colon_dash = NULL;
+    for (size_t i = 0; i < content_len - 1; i++) {
+        if (content[i] == ':' && content[i+1] == '-') {
+            colon_dash = (char*)content + i;
+            break;
+        }
+    }
+    
+    if (colon_dash) {
+        // Has default value
+        var_len = colon_dash - content;
+        size_t default_len = content_len - var_len - 2;  // -2 for :-
+        
+        var_name = malloc(var_len + 1);
+        default_value = malloc(default_len + 1);
+        
+        if (var_name && default_value) {
+            memcpy(var_name, content, var_len);
+            var_name[var_len] = 0;
+            memcpy(default_value, colon_dash + 2, default_len);
+            default_value[default_len] = 0;
+        } else {
+            free(var_name);
+            free(default_value);
+            var_name = NULL;
+            default_value = NULL;
+        }
+    } else {
+        // No default value
+        var_len = content_len;
+        var_name = malloc(var_len + 1);
+        if (var_name) {
+            memcpy(var_name, content, var_len);
+            var_name[var_len] = 0;
+        }
+    }
     
     // Validate variable name
     bool valid = true;
-    if (var_len > 0) {
-        // First character must be letter or underscore, not digit
+    if (var_name && var_len > 0) {
         if (!isalpha((unsigned char)var_name[0]) && var_name[0] != '_') {
             valid = false;
         } else {
-            // Rest can be alphanumeric or underscore
             for (size_t i = 1; i < var_len; i++) {
                 if (!is_var_char((unsigned char)var_name[i])) {
                     valid = false;
@@ -268,24 +417,62 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
             }
         }
     } else {
-        valid = false;  // Empty variable name
+        valid = false;
     }
     
-    if (valid && var_len > 0) {
-        // Create a null-terminated copy of the variable name
-        char* var = malloc(var_len + 1);
-        if (var) {
-            memcpy(var, var_name, var_len);
-            var[var_len] = 0;
-            output(out, ctx, var, start);
-            free(var);
-        } else {
-            // Memory allocation failed, output original expression
+    if (valid && var_name) {
+        // Check whitelist
+        if (!ctx_allow(ctx, var_name)) {
+            if (ctx->debug_mode) {
+                fprintf(stderr, "[DEBUG] Skip (not in whitelist): ${%s}\n", var_name);
+            }
+            ctx->skipped_count++;
             fwrite(start, 1, expr_len, out);
+            free(var_name);
+            free(default_value);
+            *p = end;
+            return;
         }
+        
+        // Get environment variable value
+        const char* env_val = getenv(var_name);
+        const char* final_value = env_val;
+        
+        // If not set and has default, use default
+        if (!env_val && default_value) {
+            final_value = default_value;
+            if (ctx->debug_mode) {
+                fprintf(stderr, "[DEBUG] Use default: ${%s:-%s} -> %s\n", 
+                        var_name, default_value, default_value);
+            }
+        }
+        
+        if (final_value) {
+            if (ctx->debug_mode && !default_value) {
+                fprintf(stderr, "[DEBUG] Replace: ${%s} -> %s\n", var_name, final_value);
+            }
+            ctx->replaced_count++;
+            fputs(final_value, out);
+        } else if (ctx->keep_undefined) {
+            if (ctx->debug_mode) {
+                fprintf(stderr, "[DEBUG] Keep undefined: ${%s}\n", var_name);
+            }
+            ctx->kept_count++;
+            fwrite(start, 1, expr_len, out);
+        } else {
+            if (ctx->debug_mode) {
+                fprintf(stderr, "[DEBUG] Remove undefined: ${%s}\n", var_name);
+            }
+            ctx->replaced_count++;
+        }
+        
+        free(var_name);
+        free(default_value);
     } else {
         // Invalid variable name, output original expression as-is
         fwrite(start, 1, expr_len, out);
+        free(var_name);
+        free(default_value);
     }
     
     *p = end;     // Move pointer to the closing brace
@@ -311,7 +498,18 @@ static void process_plain(FILE* out, char** p, struct envsubst_ctx* ctx) {
             if (var) {
                 memcpy(var, start + 1, var_len);
                 var[var_len] = 0;
-                output(out, ctx, var, start);
+                
+                // Create original expression string for debug/stats
+                size_t expr_len = var_len + 1;  // $ + var_name
+                char* orig_expr = malloc(expr_len + 1);
+                if (orig_expr) {
+                    memcpy(orig_expr, start, expr_len);
+                    orig_expr[expr_len] = 0;
+                    output(out, ctx, var, orig_expr);
+                    free(orig_expr);
+                } else {
+                    output(out, ctx, var, start);  // Fallback
+                }
                 free(var);
             } else {
                 // Memory allocation failed, output original
@@ -348,7 +546,10 @@ static void process_stream(FILE* in, FILE* out, struct envsubst_ctx* ctx) {
         }
     }
 
-    if (ferror(in)) { perror("read"); exit(EXIT_FAILURE); }
+    if (ferror(in)) {
+        fprintf(stderr, "Error: Failed to read input stream\n");
+        exit(EXIT_FAILURE);
+    }
     free(line);
 }
 
@@ -362,6 +563,10 @@ int main(int argc, char** argv) {
         {"variables",no_argument,      NULL, 'v'},
         {"keep-undefined",no_argument,  NULL, 'k'},
         {"all",     no_argument,       NULL, 128},
+        {"debug",   no_argument,       NULL, 129},
+        {"stats",   no_argument,       NULL, 130},
+        {"json-stats", no_argument,    NULL, 131},
+        {"whitelist-file", required_argument, NULL, 132},
         {0, 0, 0, 0}
     };
 
@@ -374,6 +579,14 @@ int main(int argc, char** argv) {
             case 'v': list_vars = true; break;
             case 'k': ctx.keep_undefined = true; break;
             case 128: ctx.replace_all = true; break;
+            case 129: ctx.debug_mode = true; break;
+            case 130: ctx.stats_mode = true; break;
+            case 131: ctx.json_stats = true; break;
+            case 132: 
+                if (load_whitelist_file(&ctx, optarg) < 0) {
+                    exit(EXIT_FAILURE);
+                }
+                break;
             default: usage();
         }
     }
@@ -389,6 +602,7 @@ int main(int argc, char** argv) {
     }
 
     process_stream(stdin, stdout, &ctx);
+    print_stats(&ctx);  // 输出统计信息
     ctx_free(&ctx);
     return EXIT_SUCCESS;
 }

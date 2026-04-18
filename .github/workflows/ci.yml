@@ -1,0 +1,192 @@
+name: Build & Release
+
+# 支持 2 种触发方式
+on:
+  # 1. 推送 tag 时自动构建发布 (v1.0.0 格式)
+  push:
+    tags:
+      - 'v*'
+  # 2. 手动触发运行
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '发布版本号（例如 v1.0.0），手动发布必填'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  # Linux glibc 版本 (Ubuntu/Debian/CentOS)
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build and Test
+        run: |
+          make clean
+          make
+          make test
+      
+      - name: Create Distribution Package
+        run: make dist
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-linux-x64-package
+          path: envsubst-*.tar.gz
+      
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-linux-x64
+          path: envsubst
+
+  # Alpine musl 静态链接版本
+  build-alpine:
+    runs-on: ubuntu-latest
+    container: alpine:latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install build tools
+        run: apk add --no-cache gcc musl-dev make
+      
+      - name: Build and Test
+        run: |
+          make clean
+          make
+          make test
+      
+      - name: Create Static Binary
+        run: |
+          gcc -O2 -Wall -Wextra -std=c99 -pedantic -static envsubst.c -o envsubst-alpine-x64
+          chmod +x envsubst-alpine-x64
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-alpine-x64
+          path: envsubst-alpine-x64
+
+  # macOS Intel x64
+  build-darwin-x64:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build and Test
+        run: |
+          make clean
+          make
+          make test
+      
+      - name: Create Distribution Package
+        run: make dist
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-darwin-x64-package
+          path: envsubst-*.tar.gz
+      
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-darwin-x64
+          path: envsubst
+
+  # macOS ARM64 (Apple Silicon)
+  build-darwin-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build and Test
+        run: |
+          make clean
+          make
+          make test
+      
+      - name: Create Distribution Package
+        run: make dist
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-darwin-arm64-package
+          path: envsubst-*.tar.gz
+      
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-darwin-arm64
+          path: envsubst
+
+  # 发布到 GitHub Release
+  release:
+    needs: [build-linux, build-alpine, build-darwin-x64, build-darwin-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+      
+      - name: 设置发布版本号
+        id: set_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+          echo "Release version: ${{ steps.set_version.outputs.VERSION }}"
+      
+      - name: List Artifacts
+        run: |
+          echo "=== Available Artifacts ==="
+          find . -type f -name "*.tar.gz" -o -name "envsubst*" | sort
+          echo ""
+          echo "=== Directory Structure ==="
+          ls -la
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.set_version.outputs.VERSION }}
+          name: envsubst ${{ steps.set_version.outputs.VERSION }}
+          body: |
+            ## 🎉 envsubst ${{ steps.set_version.outputs.VERSION }}
+            
+            ### 平台支持
+            - ✅ Linux x64 (glibc)
+            - ✅ Alpine Linux x64 (musl, static)
+            - ✅ macOS Intel x64
+            - ✅ macOS Apple Silicon (ARM64)
+            
+            ### 新功能
+            - 默认值支持: `${{ '{' }}VAR:-default${{ '}' }}`
+            - 调试模式: `--debug`
+            - 统计信息: `--stats` / `--json-stats`
+            - 配置文件白名单: `--whitelist-file`
+            
+            ### 安装
+            ```bash
+            # 下载对应平台的包
+            tar xzf envsubst-*-linux-x64.tar.gz
+            cd envsubst-*-linux-x64
+            sudo make install
+            ```
+          files: |
+            envsubst-linux-x64-package/*.tar.gz
+            envsubst-linux-x64/envsubst
+            envsubst-alpine-x64/envsubst-alpine-x64
+            envsubst-darwin-x64-package/*.tar.gz
+            envsubst-darwin-x64/envsubst
+            envsubst-darwin-arm64-package/*.tar.gz
+            envsubst-darwin-arm64/envsubst
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
