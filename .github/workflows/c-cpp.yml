@@ -48,7 +48,7 @@ jobs:
 
   # macOS Intel x64 → 输出 envsubst-darwin-x64
   build-darwin-x64:
-    runs-on: macos-14-intel
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - name: Build Darwin x64
