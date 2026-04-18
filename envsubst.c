@@ -126,6 +126,14 @@ static char* normalize_brace(const char* s) {
     if (!e) return NULL;
 
     size_t len = e - s;
+    
+    // Validate variable name
+    for (size_t i = 0; i < len; i++) {
+        if (!is_var_char((unsigned char)s[i])) {
+            return NULL;
+        }
+    }
+    
     char* buf = malloc(len + 1);
     if (!buf) return NULL;
     memcpy(buf, s, len);
@@ -135,17 +143,30 @@ static char* normalize_brace(const char* s) {
 
 static struct pattern parse_pattern(const char* input) {
     struct pattern pat = {0};
-    char* s = normalize_brace(input);
-    if (!s) s = normalize_plain(input);
-    if (!s) s = strdup(input);
-
-    char* star = strchr(s, '*');
+    
+    // Check for wildcard first before normalization
+    char* star = strchr(input, '*');
     if (star) {
         pat.is_wildcard = true;
-        *star = 0;
-        pat.prefix = s;
-        pat.suffix = star + 1;
+        // Extract prefix (everything before *)
+        size_t prefix_len = star - input;
+        pat.prefix = malloc(prefix_len + 1);
+        if (!pat.prefix) return pat;
+        memcpy(pat.prefix, input, prefix_len);
+        pat.prefix[prefix_len] = 0;
+        
+        // Extract suffix (everything after *)
+        pat.suffix = strdup(star + 1);
+        if (!pat.suffix) {
+            free(pat.prefix);
+            pat.prefix = NULL;
+            return pat;
+        }
     } else {
+        // No wildcard, normalize the input
+        char* s = normalize_brace(input);
+        if (!s) s = normalize_plain(input);
+        if (!s) s = strdup(input);
         pat.prefix = s;
     }
     return pat;
@@ -198,8 +219,9 @@ static int ctx_add(struct envsubst_ctx* ctx, const char* s) {
 static void parse_arg(struct envsubst_ctx* ctx, const char* arg) {
     char* buf = strdup(arg);
     char* save = NULL;
-    char* tok = strtok_r(buf, ",", &save);
-    for (; tok; tok = strtok_r(NULL, ",", &save))
+    // Support both space and comma as delimiters
+    char* tok = strtok_r(buf, " ,", &save);
+    for (; tok; tok = strtok_r(NULL, " ,", &save))
         ctx_add(ctx, tok);
     free(buf);
 }
@@ -217,20 +239,56 @@ static void output(FILE* out, struct envsubst_ctx* ctx, const char* var, const c
 static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
     char* start = *p;
     char* end = strchr(start + 2, '}');
-    if (!end) { fputc('$', out); (*p)++; return; }
-
-    char save = *end;
-    *end = 0;
-    char* var = normalize_brace(start);
-    *end = save;
-
-    if (var) {
-        output(out, ctx, var, start);
-        *p = end;
-        free(var);
-    } else {
-        fputc('$', out);
+    if (!end) { 
+        fputc('$', out); 
+        (*p)++; 
+        return; 
     }
+
+    // Calculate the length of the full ${VAR} expression
+    size_t expr_len = end - start + 1;
+    
+    // Extract variable name (skip "${" prefix)
+    const char* var_name = start + 2;
+    size_t var_len = end - start - 2;
+    
+    // Validate variable name
+    bool valid = true;
+    if (var_len > 0) {
+        // First character must be letter or underscore, not digit
+        if (!isalpha((unsigned char)var_name[0]) && var_name[0] != '_') {
+            valid = false;
+        } else {
+            // Rest can be alphanumeric or underscore
+            for (size_t i = 1; i < var_len; i++) {
+                if (!is_var_char((unsigned char)var_name[i])) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+    } else {
+        valid = false;  // Empty variable name
+    }
+    
+    if (valid && var_len > 0) {
+        // Create a null-terminated copy of the variable name
+        char* var = malloc(var_len + 1);
+        if (var) {
+            memcpy(var, var_name, var_len);
+            var[var_len] = 0;
+            output(out, ctx, var, start);
+            free(var);
+        } else {
+            // Memory allocation failed, output original expression
+            fwrite(start, 1, expr_len, out);
+        }
+    } else {
+        // Invalid variable name, output original expression as-is
+        fwrite(start, 1, expr_len, out);
+    }
+    
+    *p = end;     // Move pointer to the closing brace
 }
 
 static void process_plain(FILE* out, char** p, struct envsubst_ctx* ctx) {
@@ -238,16 +296,34 @@ static void process_plain(FILE* out, char** p, struct envsubst_ctx* ctx) {
     char* cur = start + 1;
     while (*cur && is_var_char((unsigned char)*cur)) cur++;
 
-    char save = *cur;
-    *cur = 0;
-    char* var = normalize_plain(start);
-    *cur = save;
-
-    if (var) {
-        output(out, ctx, var, start);
+    size_t var_len = cur - start - 1;  // Exclude the '$' prefix
+    
+    if (var_len > 0) {
+        // Validate: first char must be letter or underscore
+        bool valid = true;
+        if (!isalpha((unsigned char)start[1]) && start[1] != '_') {
+            valid = false;
+        }
+        
+        if (valid) {
+            // Create a null-terminated copy of the variable name
+            char* var = malloc(var_len + 1);
+            if (var) {
+                memcpy(var, start + 1, var_len);
+                var[var_len] = 0;
+                output(out, ctx, var, start);
+                free(var);
+            } else {
+                // Memory allocation failed, output original
+                fputc('$', out);
+            }
+        } else {
+            // Invalid variable name (starts with digit), output as-is
+            fwrite(start, 1, var_len + 1, out);  // Include the '$'
+        }
         *p = cur - 1;
-        free(var);
     } else {
+        // No valid variable name after $, just output $
         fputc('$', out);
     }
 }

@@ -1,5 +1,5 @@
 PACKAGE_NAME := envsubst
-PACKAGE_VERSION := 0.2.0
+PACKAGE_VERSION := 1.0.0-tekin
 
 prefix       ?= /usr/local
 bindir	     ?= /bin
