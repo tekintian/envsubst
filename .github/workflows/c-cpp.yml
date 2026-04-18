@@ -1,21 +1,104 @@
-name: C/C++ CI
+name: Build & Release
 
+# 支持 2 种触发方式
 on:
+  # 1. 推送 tag 时自动构建发布 (v1.0.0 格式)
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    tags:
+      - 'v*'
+  # 2. 手动触发运行
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '发布版本号（例如 v1.0.0），手动发布必填'
+        required: true
+        default: 'v1.0.0'
 
 jobs:
-  build:
-
+  # Linux glibc 版本 (Ubuntu/Debian/CentOS)
+  build-linux:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    - name: make
-      run: |
-        sudo apt-get install -y g++ gcc libc-dev make
-        make
-        make install
+      - uses: actions/checkout@v4
+      - name: Build Linux amd64
+        run: |
+          gcc -O2 -Wall -Wextra -std=c99 -pedantic envsubst.c -o envsubst-linux-amd64
+          chmod +x envsubst-linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-linux-amd64
+          path: envsubst-linux-amd64
 
+  # Alpine musl 静态链接版本
+  build-alpine:
+    runs-on: ubuntu-latest
+    container: alpine:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: apk add --no-cache gcc musl-dev
+      - name: Build Alpine amd64
+        run: |
+          gcc -O2 -Wall -Wextra -std=c99 -pedantic -static envsubst.c -o envsubst-alpine-amd64
+          chmod +x envsubst-alpine-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-alpine-amd64
+          path: envsubst-alpine-amd64
+
+  # macOS Intel x64 → 输出 envsubst-darwin-x64
+  build-darwin-x64:
+    runs-on: macos-14-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Darwin x64
+        run: |
+          gcc -O2 -Wall -Wextra -std=c99 -pedantic envsubst.c -o envsubst-darwin-x64
+          chmod +x envsubst-darwin-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-darwin-x64
+          path: envsubst-darwin-x64
+
+  # macOS ARM64 (Apple Silicon)
+  build-darwin-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Darwin ARM64
+        run: |
+          gcc -O2 -Wall -Wextra -std=c99 -pedantic envsubst.c -o envsubst-darwin-arm64
+          chmod +x envsubst-darwin-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: envsubst-darwin-arm64
+          path: envsubst-darwin-arm64
+
+  # 发布到 GitHub Release
+  release:
+    needs: [build-linux, build-alpine, build-darwin-x64, build-darwin-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+
+      - name: 设置发布版本号
+        id: set_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.set_version.outputs.VERSION }}
+          files: |
+            envsubst-linux-amd64/envsubst-linux-amd64
+            envsubst-alpine-amd64/envsubst-alpine-amd64
+            envsubst-darwin-x64/envsubst-darwin-x64
+            envsubst-darwin-arm64/envsubst-darwin-arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
