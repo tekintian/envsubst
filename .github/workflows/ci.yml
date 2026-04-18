@@ -21,6 +21,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Debug - Check test files
+        run: |
+          echo "=== Working directory ==="
+          pwd
+          echo "=== List all files ==="
+          ls -la
+          echo "=== Check test scripts ==="
+          ls -la test*.sh || echo "No test scripts found!"
+          echo "=== Git status ==="
+          git status
+          echo "=== Git log ==="
+          git log --oneline -3
+      
       - name: Build and Test
         run: |
           make clean
