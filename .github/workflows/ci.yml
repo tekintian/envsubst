@@ -21,19 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Debug - Check test files
-        run: |
-          echo "=== Working directory ==="
-          pwd
-          echo "=== List all files ==="
-          ls -la
-          echo "=== Check test scripts ==="
-          ls -la test*.sh || echo "No test scripts found!"
-          echo "=== Git status ==="
-          git status
-          echo "=== Git log ==="
-          git log --oneline -3
-      
       - name: Build and Test
         run: |
           make clean
@@ -63,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Install build tools
-        run: apk add --no-cache gcc musl-dev make
+        run: apk add --no-cache gcc musl-dev make bash
       
       - name: Build and Test
         run: |
@@ -84,7 +71,7 @@ jobs:
 
   # macOS Intel x64
   build-darwin-x64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       
