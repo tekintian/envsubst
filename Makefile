@@ -2,7 +2,7 @@
 # Production-Grade environment variable substitution tool
 
 PACKAGE_NAME := envsubst
-PACKAGE_VERSION := v1.0.0
+PACKAGE_VERSION := v2.0.0
 
 # Installation paths
 prefix       ?= /usr/local

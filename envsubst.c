@@ -16,9 +16,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <libgen.h>
+#include <limits.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 #ifndef ENVSUBST_VERSION
-#define ENVSUBST_VERSION "v1.0.0"
+#define ENVSUBST_VERSION "v2.0.0"
 #endif
 
 struct envsubst_ctx {
@@ -29,6 +37,8 @@ struct envsubst_ctx {
     bool debug_mode;      // 调试模式
     bool stats_mode;      // 统计模式
     bool json_stats;      // JSON 格式统计
+    bool in_place;        // 就地编辑模式
+    char* in_place_backup; // 就地编辑备份后缀
     size_t replaced_count;   // 已替换的变量数
     size_t kept_count;       // 保留的未定义变量数
     size_t skipped_count;    // 跳过的变量数（不在白名单中）
@@ -53,12 +63,14 @@ static void usage(void) {
     printf("\n");
     printf("【使用方法】\n");
     printf("  envsubst [选项] [变量名/通配符...]\n");
+    printf("  envsubst -i [选项] [变量名/通配符...] FILE  # 就地编辑\n");
     printf("\n");
     printf("【选项】\n");
     printf("  -h, --help              显示本帮助信息并退出\n");
     printf("  -V, --version           显示版本信息并退出\n");
     printf("  -v, --variables         列出允许替换的变量/通配符并退出\n");
     printf("  -k, --keep-undefined    变量未定义时保留原字符串，不删除\n");
+    printf("  -i, --in-place[=SUFFIX] 就地编辑文件（可选备份后缀）\n");
     printf("      --all               启用全替换模式：替换 $VAR 和 ${VAR}\n");
     printf("      --debug             调试模式：显示每个变量的替换过程\n");
     printf("      --stats             统计模式：显示替换统计信息\n");
@@ -216,6 +228,8 @@ static void ctx_init(struct envsubst_ctx* ctx) {
     ctx->debug_mode = false;
     ctx->stats_mode = false;
     ctx->json_stats = false;
+    ctx->in_place = false;
+    ctx->in_place_backup = NULL;
     ctx->replaced_count = 0;
     ctx->kept_count = 0;
     ctx->skipped_count = 0;
@@ -225,6 +239,9 @@ static void ctx_free(struct envsubst_ctx* ctx) {
     for (size_t i = 0; i < ctx->var_count; i++)
         free(ctx->allowed_vars[i]);
     free(ctx->allowed_vars);
+    if (ctx->in_place_backup) {
+        free(ctx->in_place_backup);
+    }
 }
 
 static void print_stats(struct envsubst_ctx* ctx) {
@@ -554,6 +571,71 @@ static void process_stream(FILE* in, FILE* out, struct envsubst_ctx* ctx) {
     free(line);
 }
 
+// 就地编辑处理函数
+static void process_in_place(const char* filename, struct envsubst_ctx* ctx) {
+    // 创建临时文件
+    char tmpfile[PATH_MAX];
+    snprintf(tmpfile, sizeof(tmpfile), "%s.XXXXXX", filename);
+    
+    int fd = mkstemp(tmpfile);
+    if (fd == -1) {
+        fprintf(stderr, "Error: Cannot create temporary file: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    
+    FILE* tmpfp = fdopen(fd, "w");
+    if (!tmpfp) {
+        close(fd);
+        unlink(tmpfile);
+        fprintf(stderr, "Error: Cannot open temporary file: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    
+    // 打开输入文件
+    FILE* infile = fopen(filename, "r");
+    if (!infile) {
+        fclose(tmpfp);
+        unlink(tmpfile);
+        fprintf(stderr, "Error: Cannot open input file '%s': %s\n", 
+                filename, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    
+    // 执行替换
+    process_stream(infile, tmpfp, ctx);
+    
+    // 关闭文件
+    fclose(infile);
+    fclose(tmpfp);
+    
+    // 检查是否有错误
+    if (ferror(stdin)) {
+        unlink(tmpfile);
+        fprintf(stderr, "Error: Failed during processing\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    // 备份原文件（如果指定）
+    if (ctx->in_place_backup) {
+        char backup[PATH_MAX];
+        snprintf(backup, sizeof(backup), "%s%s", filename, ctx->in_place_backup);
+        if (link(filename, backup) != 0 && errno != EEXIST) {
+            unlink(tmpfile);
+            fprintf(stderr, "Error: Cannot create backup '%s': %s\n", 
+                    backup, strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+    }
+    
+    // 原子替换
+    if (rename(tmpfile, filename) != 0) {
+        unlink(tmpfile);
+        fprintf(stderr, "Error: Cannot replace file '%s': %s\n", 
+                filename, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+}
+
 int main(int argc, char** argv) {
     struct envsubst_ctx ctx;
     ctx_init(&ctx);
@@ -563,6 +645,7 @@ int main(int argc, char** argv) {
         {"version", no_argument,       NULL, 'V'},
         {"variables",no_argument,      NULL, 'v'},
         {"keep-undefined",no_argument,  NULL, 'k'},
+        {"in-place", optional_argument, NULL, 'i'},
         {"all",     no_argument,       NULL, 128},
         {"debug",   no_argument,       NULL, 129},
         {"stats",   no_argument,       NULL, 130},
@@ -573,12 +656,19 @@ int main(int argc, char** argv) {
 
     int opt;
     bool list_vars = false;
-    while ((opt = getopt_long(argc, argv, "hvVk", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hvVk::i::", opts, NULL)) != -1) {
         switch (opt) {
             case 'h': usage(); break;
             case 'V': version(); break;
             case 'v': list_vars = true; break;
             case 'k': ctx.keep_undefined = true; break;
+            case 'i':
+                ctx.in_place = true;
+                // optional_argument: optarg 为 NULL 表示没有参数
+                if (optarg) {
+                    ctx.in_place_backup = strdup(optarg);
+                }
+                break;
             case 128: ctx.replace_all = true; break;
             case 129: ctx.debug_mode = true; break;
             case 130: ctx.stats_mode = true; break;
@@ -602,8 +692,41 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    process_stream(stdin, stdout, &ctx);
-    print_stats(&ctx);  // 输出统计信息
+    // 就地编辑模式
+    if (ctx.in_place) {
+        // 需要指定文件名
+        if (optind >= argc) {
+            fprintf(stderr, "Error: In-place editing requires a filename\n");
+            fprintf(stderr, "Usage: envsubst -i [OPTIONS] [PATTERNS...] FILE\n");
+            ctx_free(&ctx);
+            exit(EXIT_FAILURE);
+        }
+        
+        const char* filename = argv[argc - 1];
+        
+        // 如果最后一个参数是文件，前面的都是白名单规则
+        struct stat st;
+        if (stat(filename, &st) == 0 && S_ISREG(st.st_mode)) {
+            // 解析白名单（排除最后一个参数）
+            ctx.var_count = 0;  // 重置
+            free(ctx.allowed_vars);
+            ctx.allowed_vars = NULL;
+            for (int i = optind; i < argc - 1; i++)
+                parse_arg(&ctx, argv[i]);
+            
+            process_in_place(filename, &ctx);
+            print_stats(&ctx);
+        } else {
+            fprintf(stderr, "Error: '%s' is not a regular file\n", filename);
+            ctx_free(&ctx);
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        // 标准流模式
+        process_stream(stdin, stdout, &ctx);
+        print_stats(&ctx);
+    }
+    
     ctx_free(&ctx);
     return EXIT_SUCCESS;
 }

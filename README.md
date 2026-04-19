@@ -1,6 +1,6 @@
-# `envsubst` - 生产级安全环境变量替换工具
+# `envsubst` v2.0.0 - 生产级安全环境变量替换工具
 
-安全高效、支持通配符白名单、默认值语法，专为 Nginx / Docker / Kubernetes 容器场景优化的增强版 `envsubst` 工具。
+安全高效、支持通配符白名单、默认值语法、**原生就地编辑**，专为 Nginx / Docker / Kubernetes 容器场景优化的增强版 `envsubst` 工具。
 
 ---
 
@@ -10,6 +10,8 @@
 - **双模式切换**：`--all` 启用传统模式，同时替换 `$VAR` 和 `${VAR}`
 - **强大通配符白名单**：支持前缀 `REST_*`、后缀 `*_PROD`、中间匹配 `APP_*_API`
 - **默认值支持**：`${VAR:-default}` bash 风格语法，未设置时使用默认值
+- **🆕 原生就地编辑**：`-i` / `--in-place` 选项，类似 `sed -i`，安全原子操作
+- **备份功能**：`-i.bak` 自动备份原文件，支持自定义后缀
 - **安全兜底**：`-k` 保留未定义变量，不删除、不空白
 - **调试与统计**：`--debug` 显示替换过程，`--stats`/`--json-stats` 提供统计信息
 - **配置文件支持**：`--whitelist-file` 从文件读取白名单规则
@@ -33,13 +35,14 @@ mv envsubst /usr/local/bin/
 ## 📖 完整参数说明
 
 ```
-envsubst v1.0.0 - 安全型环境变量替换工具 (支持通配符白名单)
+envsubst v2.0.0 - 安全型环境变量替换工具 (支持通配符白名单)
 
 【选项】
   -h, --help              显示帮助信息
   -V, --version           显示版本号
   -v, --variables         列出允许的匹配规则并退出
   -k, --keep-undefined    变量未定义时保留原字符串，不删除
+  -i, --in-place[=SUFFIX] 就地编辑文件（可选备份后缀）🆕
       --all               全替换模式：同时替换 $VAR 和 ${VAR}
       --debug             调试模式：显示每个变量的替换过程
       --stats             统计模式：显示替换统计信息
@@ -118,7 +121,34 @@ jq '.envsubst_stats.variables_replaced' stats.json
 # 输出: 2
 ```
 
-### 8. 配置文件白名单
+### 8. 🆕 就地编辑（v2.0.0+）
+```bash
+# 基本就地编辑
+envsubst -i 'APP_* DB_*' config.conf
+
+# 带备份的就地编辑
+envsubst -i.bak 'APP_* DB_*' config.conf
+# 结果:
+#   config.conf      ← 新内容
+#   config.conf.bak  ← 原内容备份
+
+# 自定义备份后缀
+envsubst -i.20250101 'PROD_*' prod.conf
+# 结果: prod.conf.20250101
+
+# 无白名单（全部替换）
+envsubst -i config.conf
+```
+
+**优势**：
+- ✅ 语法简洁优雅（类似 `sed -i`）
+- ✅ 原子操作，安全可靠
+- ✅ 自动清理临时文件
+- ✅ 可选备份功能
+
+详见 [docs/IN_PLACE_EDITING.md](docs/IN_PLACE_EDITING.md)
+
+### 9. 配置文件白名单
 ```bash
 # 创建白名单文件 rules.txt
 cat > rules.txt << EOF
@@ -132,7 +162,7 @@ EOF
 envsubst --whitelist-file rules.txt < template.conf > output.conf
 ```
 
-### 9. 管道模式
+### 10. 管道模式
 ```bash
 cat app.tpl | envsubst 'DB_* REDIS_*' > app.cfg
 ```
@@ -142,12 +172,25 @@ cat app.tpl | envsubst 'DB_* REDIS_*' > app.cfg
 ## 🐳 Docker 容器最佳实践
 
 ### Dockerfile 内置
+
+**传统方式（v1.x）**：
 ```dockerfile
 COPY envsubst /usr/local/bin/
 COPY nginx.conf.template /etc/nginx/
 
 # 启动前替换变量
 CMD envsubst 'REST_* WAF_*' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf \
+    && nginx -g 'daemon off;'
+```
+
+**🆕 推荐方式（v2.0.0+）**：
+```dockerfile
+COPY envsubst /usr/local/bin/
+COPY nginx.conf.template /etc/nginx/
+
+# 使用原地编辑，更简洁安全
+CMD envsubst -i.bak 'REST_* WAF_*' /etc/nginx/nginx.conf.template \
+    && mv /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf \
     && nginx -g 'daemon off;'
 ```
 
@@ -373,6 +416,32 @@ jq '.' stats.json
 # envsubst --json-stats < tpl.conf 2>stats.json  ✅ 正确，stderr 是 JSON
 ```
 
+### 🆕 同文件读写问题（v2.0.0+ 已解决）
+
+**问题**: `envsubst < file > file` 会清空文件
+
+**原因**: Shell 重定向机制导致，不是 envsubst 的 bug
+
+**解决方案**:
+
+1. **🆕 推荐：使用 `-i` 选项（v2.0.0+）**
+   ```bash
+   envsubst -i 'APP_*' config.conf
+   envsubst -i.bak 'APP_*' config.conf  # 带备份
+   ```
+
+2. **传统方式：使用临时文件**
+   ```bash
+   envsubst < config.tpl > config.tmp && mv config.tmp config.tpl
+   ```
+
+3. **使用 sponge 工具**
+   ```bash
+   envsubst < config.tpl | sponge config.tpl
+   ```
+
+详见 [docs/SPECIAL_SCENARIOS.md](docs/SPECIAL_SCENARIOS.md)
+
 ---
 
 ## 📊 与原生 envsubst 对比
@@ -389,6 +458,7 @@ jq '.' stats.json
 | 调试模式 | ❌ | ✅ `--debug` |
 | 统计信息 | ❌ | ✅ `--stats`/`--json-stats` |
 | 配置文件支持 | ❌ | ✅ `--whitelist-file` |
+| 🆕 **就地编辑** | ❌ | ✅ **`-i` / `--in-place`** |
 | 二进制大小 | ~17KB | ~50KB |
 | 依赖库 | gettext (libintl) | 无（零依赖） |
 | 容器友好度 | 一般 | ✅ 优秀 |
@@ -404,7 +474,13 @@ jq '.' stats.json
 
 ## 🛠 项目信息
 - **Repo**: https://github.com/tekintian/envsubst/
-- **Version**: v1.0.0
+- **Version**: v2.0.0
+- **License**: MIT
+
+### 📚 相关文档
+- [IN_PLACE_EDITING.md](docs/IN_PLACE_EDITING.md) - 就地编辑完整指南 🆕
+- [SPECIAL_SCENARIOS.md](docs/SPECIAL_SCENARIOS.md) - 特殊场景分析
+- [CSDN_ARTICLE.md](CSDN_ARTICLE.md) - 技术文章
 
 ---
 
@@ -412,5 +488,3 @@ jq '.' stats.json
 - 微信公众号：**技术与认知**
 - 站点：https://ai.tekin.cn
 - 邮箱：tekintian@gmail.com
-
----

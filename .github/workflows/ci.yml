@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: '发布版本号（例如 v1.0.0），手动发布必填'
+        description: '发布版本号（例如 v2.0.0），手动发布必填'
         required: true
-        default: 'v1.0.0'
+        default: 'v2.0.0'
 
 jobs:
   # Linux glibc 版本 (Ubuntu/Debian/CentOS)
