@@ -229,6 +229,125 @@ echo "✅ Configuration generated successfully"
 exec "$@"
 ```
 
+### 🆕 使用预构建镜像（最简单）
+
+从 **v3.5** 开始，以下 Alpine 镜像已内置最新版本的 envsubst v2.0.0+：
+
+#### 可用镜像源
+
+| 镜像源 | 镜像名称 | 版本支持 |
+|--------|---------|----------|
+| **GitHub Container Registry** | `ghcr.io/tekintian/alpine` | 3.5 - 3.23 ✅ |
+| **Docker Hub** | `tekintian/alpine` | 3.5 - 3.23 ✅ |
+| **阿里云容器镜像** | `registry.cn-hangzhou.aliyuncs.com/alpine-docker/alpine` | 3.5 - 3.23 ✅ |
+
+**查看所有版本**: https://github.com/tekintian/alpine/pkgs/container/alpine
+
+#### 示例 1: 直接使用镜像
+
+```dockerfile
+# 使用 GitHub Container Registry (推荐)
+FROM ghcr.io/tekintian/alpine:3.21
+
+# envsubst 已经内置，直接使用！
+COPY nginx.conf.template /etc/nginx/
+
+CMD envsubst -i.bak 'NGINX_* APP_*' /etc/nginx/nginx.conf.template \
+    && mv /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf \
+    && nginx -g 'daemon off;'
+```
+
+#### 示例 2: 国内加速（阿里云）
+
+```dockerfile
+# 使用阿里云镜像（国内访问更快）
+FROM registry.cn-hangzhou.aliyuncs.com/alpine-docker/alpine:3.21
+
+COPY nginx.conf.template /etc/nginx/
+
+# 直接使用内置的 envsubst
+RUN envsubst -i 'NGINX_*' /etc/nginx/nginx.conf.template
+
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+#### 示例 3: Docker Compose 中使用
+
+```yaml
+version: '3.8'
+services:
+  nginx:
+    image: ghcr.io/tekintian/alpine:3.21
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/nginx.conf.template
+      - ./html:/usr/share/nginx/html
+    environment:
+      - NGINX_HOST=example.com
+      - NGINX_PORT=80
+      - APP_BACKEND=http://api:8080
+    ports:
+      - "80:80"
+    command: >
+      sh -c "envsubst -i.bak 'NGINX_* APP_*' /etc/nginx/nginx.conf.template
+             && mv /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
+             && nginx -g 'daemon off;'"
+```
+
+#### 示例 4: Kubernetes ConfigMap + InitContainer
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-app
+spec:
+  template:
+    spec:
+      # 使用 init container 生成配置
+      initContainers:
+      - name: config-generator
+        image: ghcr.io/tekintian/alpine:3.21
+        command: ['sh', '-c']
+        args:
+        - |
+          echo "Generating nginx config..."
+          envsubst -i 'NGINX_* APP_* DB_*' /config/nginx.conf.template
+          echo "✅ Config generated"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /config
+        envFrom:
+        - configMapRef:
+            name: nginx-env-vars
+      
+      # 主容器
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/nginx/conf.d
+      
+      volumes:
+      - name: config-volume
+        emptyDir: {}
+```
+
+#### 优势对比
+
+| 方式 | 优点 | 缺点 |
+|------|------|------|
+| **预构建镜像** | ✅ 零配置<br>✅ 即时可用<br>✅ 自动更新 | ⚠️ 依赖外部镜像 |
+| 多阶段构建 | ✅ 完全可控<br>✅ 无外部依赖 | ⚠️ 构建时间长<br>⚠️ 需要维护 |
+| 手动复制二进制 | ✅ 简单直接 | ⚠️ 需要编译<br>⚠️ 平台兼容性问题 |
+
+**推荐场景**：
+- 🚀 **快速原型/开发环境**：使用预构建镜像
+- 🏭 **生产环境**：根据团队策略选择（预构建或多阶段构建）
+- 🌏 **国内用户**：优先使用阿里云镜像
+
 ### Kubernetes 启动脚本
 ```bash
 #!/bin/sh
