@@ -1,3 +1,4 @@
 *.o
 envsubst
 nginx.conf
+envsubst-v1.0.0-darwin-x64.tar.gz

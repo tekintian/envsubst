@@ -91,6 +91,7 @@ static void usage(void) {
     printf("\n");
     printf("【项目主页】https://github.com/tekintian/envsubst/\n");
     printf("【联系作者】tekintian@gmail.com\n");
+    printf("【软件定制开发】https://ai.tekin.cn\n");
     printf("\n");
 
     exit(EXIT_SUCCESS);
