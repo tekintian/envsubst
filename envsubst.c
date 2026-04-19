@@ -25,6 +25,105 @@
 #define PATH_MAX 4096
 #endif
 
+// 检测是否在容器环境中运行
+static bool is_container_environment(void) {
+    // 方法 1: 检查 /.dockerenv 文件（Docker）
+    if (access("/.dockerenv", F_OK) == 0) {
+        return true;
+    }
+    
+    // 方法 2: 检查 /run/.containerenv 文件（Podman）
+    if (access("/run/.containerenv", F_OK) == 0) {
+        return true;
+    }
+    
+    // 方法 3: 检查 cgroup 中是否包含 docker/containerd/kubepods
+    FILE* cgroup = fopen("/proc/1/cgroup", "r");
+    if (cgroup) {
+        char line[256];
+        while (fgets(line, sizeof(line), cgroup)) {
+            if (strstr(line, "docker") || 
+                strstr(line, "containerd") || 
+                strstr(line, "kubepods") ||
+                strstr(line, "lxc")) {
+                fclose(cgroup);
+                return true;
+            }
+        }
+        fclose(cgroup);
+    }
+    
+    // 方法 4: 检查环境变量
+    const char* container_env = getenv("CONTAINER");
+    if (container_env && strlen(container_env) > 0) {
+        return true;
+    }
+    
+    const char* kubernetes_env = getenv("KUBERNETES_SERVICE_HOST");
+    if (kubernetes_env && strlen(kubernetes_env) > 0) {
+        return true;
+    }
+    
+    return false;
+}
+
+// 检测文件是否在挂载卷上
+static bool is_mounted_volume(const char* filename) {
+    struct stat st_file;
+    struct stat st_parent;
+    char parent_dir[PATH_MAX];
+    
+    // 获取父目录
+    strncpy(parent_dir, filename, sizeof(parent_dir) - 1);
+    parent_dir[sizeof(parent_dir) - 1] = '\0';
+    
+    char* last_slash = strrchr(parent_dir, '/');
+    if (last_slash && last_slash != parent_dir) {
+        *last_slash = '\0';
+    } else {
+        strcpy(parent_dir, "/");
+    }
+    
+    // 获取文件和父目录的 stat 信息
+    if (stat(filename, &st_file) != 0) {
+        return false;  // 文件不存在，无法判断
+    }
+    
+    if (stat(parent_dir, &st_parent) != 0) {
+        return false;  // 父目录无法访问
+    }
+    
+    // 关键检测：比较设备和 inode
+    // 如果文件的设备ID与父目录不同，说明是挂载点
+    if (st_file.st_dev != st_parent.st_dev) {
+        return true;
+    }
+    
+    // 额外检测：检查是否是 overlay/aufs 文件系统（Docker 常见）
+    FILE* mounts = fopen("/proc/mounts", "r");
+    if (mounts) {
+        char line[512];
+        while (fgets(line, sizeof(line), mounts)) {
+            // 检查是否包含 overlay, aufs, bind 等挂载类型
+            if (strstr(line, "overlay") || 
+                strstr(line, "aufs") ||
+                (strstr(line, "bind") && strstr(line, parent_dir))) {
+                // 进一步检查这个挂载点是否影响我们的文件
+                char mount_point[256];
+                if (sscanf(line, "%*s %255s", mount_point) == 1) {
+                    if (strncmp(filename, mount_point, strlen(mount_point)) == 0) {
+                        fclose(mounts);
+                        return true;
+                    }
+                }
+            }
+        }
+        fclose(mounts);
+    }
+    
+    return false;
+}
+
 #ifndef ENVSUBST_VERSION
 #define ENVSUBST_VERSION "v2.0.0"
 #endif
@@ -38,6 +137,7 @@ struct envsubst_ctx {
     bool stats_mode;      // 统计模式
     bool json_stats;      // JSON 格式统计
     bool in_place;        // 就地编辑模式
+    bool safe_mode;       // 安全模式（使用内容覆盖而非 rename）
     char* in_place_backup; // 就地编辑备份后缀
     size_t replaced_count;   // 已替换的变量数
     size_t kept_count;       // 保留的未定义变量数
@@ -71,6 +171,7 @@ static void usage(void) {
     printf("  -v, --variables         列出允许替换的变量/通配符并退出\n");
     printf("  -k, --keep-undefined    变量未定义时保留原字符串，不删除\n");
     printf("  -i, --in-place[=SUFFIX] 就地编辑文件（可选备份后缀）\n");
+    printf("  -s, --safe              安全模式：使用内容覆盖 (自动检测挂载卷)\n");
     printf("      --all               启用全替换模式：替换 $VAR 和 ${VAR}\n");
     printf("      --debug             调试模式：显示每个变量的替换过程\n");
     printf("      --stats             统计模式：显示替换统计信息\n");
@@ -229,6 +330,7 @@ static void ctx_init(struct envsubst_ctx* ctx) {
     ctx->stats_mode = false;
     ctx->json_stats = false;
     ctx->in_place = false;
+    ctx->safe_mode = false;
     ctx->in_place_backup = NULL;
     ctx->replaced_count = 0;
     ctx->kept_count = 0;
@@ -573,6 +675,33 @@ static void process_stream(FILE* in, FILE* out, struct envsubst_ctx* ctx) {
 
 // 就地编辑处理函数
 static void process_in_place(const char* filename, struct envsubst_ctx* ctx) {
+    // 智能检测：是否在容器环境且文件在挂载卷上
+    bool in_container = is_container_environment();
+    bool on_mounted_vol = in_container ? is_mounted_volume(filename) : false;
+    
+    // 自动选择模式：
+    // - 挂载卷：强制使用安全模式（即使用户未指定 -s）
+    // - 非挂载卷：使用用户指定的模式
+    bool use_safe_mode = ctx->safe_mode || on_mounted_vol;
+    
+    if (on_mounted_vol && !ctx->safe_mode) {
+        // 检测到挂载卷但未指定 -s，自动启用并提示
+        fprintf(stderr, "Info: Mounted volume detected, using safe mode automatically\n");
+    }
+    
+    // 智能备份逻辑：
+    // - 容器环境：默认不备份（除非明确指定 -i.SUFFIX）
+    // - 非容器环境：如果指定了 -i.SUFFIX 则备份
+    bool should_backup = ctx->in_place_backup != NULL;
+    
+    if (in_container && !ctx->in_place_backup) {
+        // 容器环境且未明确指定备份，静默跳过
+        should_backup = false;
+    } else if (in_container && ctx->in_place_backup) {
+        // 容器环境但用户明确要求备份，执行备份并提示
+        fprintf(stderr, "Info: Creating backup in container environment (explicitly requested)\n");
+    }
+    
     // 创建临时文件
     char tmpfile[PATH_MAX];
     snprintf(tmpfile, sizeof(tmpfile), "%s.XXXXXX", filename);
@@ -606,33 +735,127 @@ static void process_in_place(const char* filename, struct envsubst_ctx* ctx) {
     
     // 关闭文件
     fclose(infile);
-    fclose(tmpfp);
-    
-    // 检查是否有错误
-    if (ferror(stdin)) {
+    if (fclose(tmpfp) != 0) {
         unlink(tmpfile);
-        fprintf(stderr, "Error: Failed during processing\n");
+        fprintf(stderr, "Error: Failed to write temporary file: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
     
-    // 备份原文件（如果指定）
-    if (ctx->in_place_backup) {
-        char backup[PATH_MAX];
-        snprintf(backup, sizeof(backup), "%s%s", filename, ctx->in_place_backup);
-        if (link(filename, backup) != 0 && errno != EEXIST) {
+    // 替换文件
+    if (use_safe_mode) {
+        // 安全模式：使用内容覆盖（兼容 Docker 挂载卷）
+        
+        // 保存原文件的权限和所有者信息
+        struct stat orig_stat;
+        bool has_orig_stat = (stat(filename, &orig_stat) == 0);
+        
+        // 备份原文件（如果需要）
+        if (should_backup) {
+            char backup[PATH_MAX];
+            snprintf(backup, sizeof(backup), "%s%s", filename, ctx->in_place_backup);
+            
+            FILE* src = fopen(filename, "r");
+            if (!src) {
+                unlink(tmpfile);
+                fprintf(stderr, "Error: Cannot read file for backup: %s\n", strerror(errno));
+                exit(EXIT_FAILURE);
+            }
+            
+            FILE* dst = fopen(backup, "w");
+            if (!dst) {
+                fclose(src);
+                unlink(tmpfile);
+                fprintf(stderr, "Error: Cannot create backup '%s': %s\n", 
+                        backup, strerror(errno));
+                exit(EXIT_FAILURE);
+            }
+            
+            char buffer[8192];
+            size_t bytes;
+            while ((bytes = fread(buffer, 1, sizeof(buffer), src)) > 0) {
+                fwrite(buffer, 1, bytes, dst);
+            }
+            
+            fclose(src);
+            fclose(dst);
+        }
+        
+        // 1. 打开临时文件读取
+        FILE* tmp_read = fopen(tmpfile, "r");
+        if (!tmp_read) {
             unlink(tmpfile);
-            fprintf(stderr, "Error: Cannot create backup '%s': %s\n", 
-                    backup, strerror(errno));
+            fprintf(stderr, "Error: Cannot read temporary file: %s\n", strerror(errno));
             exit(EXIT_FAILURE);
         }
-    }
-    
-    // 原子替换
-    if (rename(tmpfile, filename) != 0) {
+        
+        // 2. 打开原文件写入（截断）
+        FILE* orig_write = fopen(filename, "w");
+        if (!orig_write) {
+            fclose(tmp_read);
+            unlink(tmpfile);
+            fprintf(stderr, "Error: Cannot write to file '%s': %s\n", 
+                    filename, strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        
+        // 3. 复制内容
+        char buffer[8192];
+        size_t bytes;
+        while ((bytes = fread(buffer, 1, sizeof(buffer), tmp_read)) > 0) {
+            if (fwrite(buffer, 1, bytes, orig_write) != bytes) {
+                fclose(tmp_read);
+                fclose(orig_write);
+                unlink(tmpfile);
+                fprintf(stderr, "Error: Failed to write content\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        
+        // 4. 关闭文件
+        fclose(tmp_read);
+        fclose(orig_write);
+        
+        // 5. 恢复原文件的权限和所有者
+        if (has_orig_stat) {
+            // 恢复权限模式
+            if (chmod(filename, orig_stat.st_mode) != 0) {
+                fprintf(stderr, "Warning: Cannot restore permissions: %s\n", strerror(errno));
+            }
+            
+            // 恢复所有者（需要 root 权限）
+            if (chown(filename, orig_stat.st_uid, orig_stat.st_gid) != 0) {
+                // 非 root 用户可能失败，只警告不退出
+                if (errno != EPERM) {
+                    fprintf(stderr, "Warning: Cannot restore ownership: %s\n", strerror(errno));
+                }
+            }
+        }
+        
+        // 6. 删除临时文件
         unlink(tmpfile);
-        fprintf(stderr, "Error: Cannot replace file '%s': %s\n", 
-                filename, strerror(errno));
-        exit(EXIT_FAILURE);
+    } else {
+        // 标准模式：使用 rename (原子操作)
+        
+        // 备份原文件（如果需要）
+        if (should_backup) {
+            char backup[PATH_MAX];
+            snprintf(backup, sizeof(backup), "%s%s", filename, ctx->in_place_backup);
+            if (link(filename, backup) != 0 && errno != EEXIST) {
+                unlink(tmpfile);
+                fprintf(stderr, "Error: Cannot create backup '%s': %s\n", 
+                        backup, strerror(errno));
+                exit(EXIT_FAILURE);
+            }
+        }
+        
+        // 原子替换
+        if (rename(tmpfile, filename) != 0) {
+            unlink(tmpfile);
+            fprintf(stderr, "Error: Cannot replace file '%s': %s\n", 
+                    filename, strerror(errno));
+            fprintf(stderr, "Hint: For Docker volumes, use -s/--safe option\n");
+            exit(EXIT_FAILURE);
+        }
     }
 }
 
@@ -646,6 +869,7 @@ int main(int argc, char** argv) {
         {"variables",no_argument,      NULL, 'v'},
         {"keep-undefined",no_argument,  NULL, 'k'},
         {"in-place", optional_argument, NULL, 'i'},
+        {"safe",    no_argument,       NULL, 's'},
         {"all",     no_argument,       NULL, 128},
         {"debug",   no_argument,       NULL, 129},
         {"stats",   no_argument,       NULL, 130},
@@ -656,7 +880,7 @@ int main(int argc, char** argv) {
 
     int opt;
     bool list_vars = false;
-    while ((opt = getopt_long(argc, argv, "hvVk::i::", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hvVk::i::s", opts, NULL)) != -1) {
         switch (opt) {
             case 'h': usage(); break;
             case 'V': version(); break;
@@ -668,6 +892,9 @@ int main(int argc, char** argv) {
                 if (optarg) {
                     ctx.in_place_backup = strdup(optarg);
                 }
+                break;
+            case 's':
+                ctx.safe_mode = true;
                 break;
             case 128: ctx.replace_all = true; break;
             case 129: ctx.debug_mode = true; break;

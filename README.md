@@ -561,6 +561,85 @@ jq '.' stats.json
 
 详见 [docs/SPECIAL_SCENARIOS.md](docs/SPECIAL_SCENARIOS.md)
 
+### 🆕 Docker 挂载卷 "Resource busy" 错误
+
+**问题**: 使用 `-v` 挂载配置文件时，`envsubst -i` 报错：
+```
+mv: can't rename '/path/to/nginx.conf.tmp': Resource busy
+```
+
+**原因**: 
+- Docker 挂载卷的文件可能被宿主机文件系统锁定
+- `envsubst -i` 内部使用 `rename()` 系统调用，在挂载卷上可能失败
+- `sed -i` 也有同样的问题
+
+**解决方案 1: 使用内容覆盖而非文件重命名（推荐）**
+
+```bash
+#!/bin/sh
+# docker-entrypoint.sh
+
+NGINX_CONF="/etc/nginx/nginx.conf"
+
+# 创建临时文件
+TMP_CONF=$(mktemp /tmp/nginx.conf.XXXXXX)
+trap "rm -f '$TMP_CONF'" EXIT
+
+# 替换变量到临时文件
+envsubst < "$NGINX_CONF" > "$TMP_CONF"
+
+# 使用 cat 覆盖原文件内容（而不是 mv）
+cat "$TMP_CONF" > "$NGINX_CONF"
+
+# 清理
+rm -f "$TMP_CONF"
+trap - EXIT
+
+exec nginx -g 'daemon off;'
+```
+
+**原理**:
+- `cat file > target` 是写入文件内容，不改变 inode
+- `mv file target` 是重命名文件，会改变 inode（在挂载卷上可能失败）
+
+**解决方案 2: 使用模板文件**
+
+```dockerfile
+# Dockerfile
+COPY nginx.conf.template /etc/nginx/
+COPY docker-entrypoint.sh /
+
+CMD ["/docker-entrypoint.sh"]
+```
+
+```bash
+#!/bin/sh
+# docker-entrypoint.sh
+
+# 从模板生成配置（不涉及原地编辑）
+envsubst < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+
+exec nginx -g 'daemon off;'
+```
+
+**解决方案 3: 使用智能检测脚本**
+
+参考项目中的 [docker-entrypoint-safe.sh](docker-entrypoint-safe.sh)，它会自动检测挂载卷并选择合适的策略。
+
+**对比**:
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| 内容覆盖 (cat) | ✅ 兼容挂载卷<br>✅ 简单可靠 | ⚠️ 需要手动管理临时文件 |
+| 模板文件 | ✅ 最安全<br>✅ 无冲突 | ⚠️ 需要维护两个文件 |
+| 智能检测脚本 | ✅ 自动适配<br>✅ 最佳体验 | ⚠️ 脚本稍复杂 |
+| envsubst -i | ✅ 简洁 | ❌ 挂载卷可能失败 |
+
+**推荐**: 
+- 🚀 **开发环境**：使用模板文件方案
+- 🏭 **生产环境**：使用智能检测脚本
+- ⚡ **快速测试**：使用内容覆盖方案
+
 ---
 
 ## 📊 与原生 envsubst 对比

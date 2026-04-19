@@ -548,6 +548,234 @@ rm -f /tmp/large_output.txt
 
 echo ""
 
+echo ""
+
+# ==========================================
+# 第十六部分：就地编辑功能 (-i)
+# ==========================================
+echo -e "${YELLOW}=== 第十六部分：就地编辑功能 ===${NC}"
+echo ""
+
+# Test 16.1: 基本就地编辑
+cat > /tmp/test_inplace.conf << 'EOF'
+PORT=${PORT}
+HOST=${HOST}
+EOF
+run_test "基本就地编辑" \
+    "PORT=8080 HOST=localhost ./envsubst -i 'PORT HOST' /tmp/test_inplace.conf && \
+     grep -q 'PORT=8080' /tmp/test_inplace.conf && \
+     grep -q 'HOST=localhost' /tmp/test_inplace.conf"
+rm -f /tmp/test_inplace.conf
+
+# Test 16.2: 就地编辑带备份
+cat > /tmp/test_backup.conf << 'EOF'
+VAL=${VAL}
+EOF
+run_test "就地编辑带备份" \
+    "VAL=original ./envsubst -i.bak 'VAL' /tmp/test_backup.conf && \
+     grep -q 'VAL=original' /tmp/test_backup.conf && \
+     grep -q 'VAL=\${VAL}' /tmp/test_backup.conf.bak"
+rm -f /tmp/test_backup.conf /tmp/test_backup.conf.bak
+
+# Test 16.3: 就地编辑多个文件
+cat > /tmp/test_multi1.conf << 'EOF'
+A=${A}
+EOF
+cat > /tmp/test_multi2.conf << 'EOF'
+B=${B}
+EOF
+run_test "就地编辑多个文件" \
+    "A=1 B=2 ./envsubst -i 'A' /tmp/test_multi1.conf && \
+     A=1 B=2 ./envsubst -i 'B' /tmp/test_multi2.conf && \
+     grep -q 'A=1' /tmp/test_multi1.conf && \
+     grep -q 'B=2' /tmp/test_multi2.conf"
+rm -f /tmp/test_multi*.conf
+
+# Test 16.4: 就地编辑保护 Nginx 内置变量
+cat > /tmp/test_nginx.conf << 'EOF'
+server {
+    listen ${PORT:-80};
+    server_name $host;
+    location / {
+        proxy_pass http://${BACKEND:-localhost};
+    }
+}
+EOF
+run_test "就地编辑保护 Nginx 内置变量" \
+    "PORT=443 BACKEND=api ./envsubst -i 'PORT BACKEND' /tmp/test_nginx.conf && \
+     grep -q 'listen 443' /tmp/test_nginx.conf && \
+     grep -q 'proxy_pass http://api' /tmp/test_nginx.conf && \
+     grep -q 'server_name \$host' /tmp/test_nginx.conf"
+rm -f /tmp/test_nginx.conf
+
+echo ""
+
+# ==========================================
+# 第十七部分：安全模式 (-s)
+# ==========================================
+echo -e "${YELLOW}=== 第十七部分：安全模式 ===${NC}"
+echo ""
+
+# Test 17.1: 基本安全模式
+cat > /tmp/test_safe.conf << 'EOF'
+X=${X}
+EOF
+run_test "基本安全模式" \
+    "X=test ./envsubst -i -s 'X' /tmp/test_safe.conf && \
+     grep -q 'X=test' /tmp/test_safe.conf"
+rm -f /tmp/test_safe.conf
+
+# Test 17.2: 安全模式内容覆盖（不改 inode）
+cat > /tmp/test_inode.conf << 'EOF'
+DATA=${DATA}
+EOF
+# 获取原始 inode
+if command -v stat >/dev/null 2>&1; then
+    original_inode=$(stat -f '%i' /tmp/test_inode.conf 2>/dev/null || stat -c '%i' /tmp/test_inode.conf 2>/dev/null || echo "unknown")
+    DATA=new ./envsubst -i -s 'DATA' /tmp/test_inode.conf
+    new_inode=$(stat -f '%i' /tmp/test_inode.conf 2>/dev/null || stat -c '%i' /tmp/test_inode.conf 2>/dev/null || echo "unknown")
+    run_test "安全模式保持 inode" \
+        "[ \"$original_inode\" = \"$new_inode\" ] || [ \"$original_inode\" = \"unknown\" ]"
+else
+    # 如果 stat 不可用，只检查内容
+    run_test "安全模式内容正确" \
+        "grep -q 'DATA=new' /tmp/test_inode.conf"
+fi
+rm -f /tmp/test_inode.conf
+
+# Test 17.3: 安全模式在非容器环境下不自动备份
+rm -f /tmp/test_safe_nobackup.conf*
+cat > /tmp/test_safe_nobackup.conf << 'EOF'
+Y=${Y}
+EOF
+run_test "安全模式非容器环境无备份" \
+    "Y=val ./envsubst -i -s 'Y' /tmp/test_safe_nobackup.conf && \
+     [ ! -f /tmp/test_safe_nobackup.conf.bak ]"
+rm -f /tmp/test_safe_nobackup.conf*
+
+echo ""
+
+# ==========================================
+# 第十八部分：智能容器检测
+# ==========================================
+echo -e "${YELLOW}=== 第十八部分：智能容器检测 ===${NC}"
+echo ""
+
+# Test 18.1: 非容器环境不自动启用安全模式
+cat > /tmp/test_nocontainer.conf << 'EOF'
+Z=${Z}
+EOF
+# 在非容器环境中，不应该看到 "Mounted volume detected" 提示
+run_test "非容器环境无挂载卷提示" \
+    "! Z=test ./envsubst -i 'Z' /tmp/test_nocontainer.conf 2>&1 | grep -q 'Mounted volume detected'"
+rm -f /tmp/test_nocontainer.conf
+
+# Test 18.2: 容器检测函数存在（通过帮助信息间接测试）
+run_test "帮助信息显示安全模式" \
+    "./envsubst --help | grep -q 'safe.*自动检测挂载卷'"
+
+echo ""
+
+# ==========================================
+# 第十九部分：权限保持
+# ==========================================
+echo -e "${YELLOW}=== 第十九部分：权限保持 ===${NC}"
+echo ""
+
+# Test 19.1: 安全模式保持文件权限
+cat > /tmp/test_perm.conf << 'EOF'
+P=${P}
+EOF
+chmod 640 /tmp/test_perm.conf
+run_test "安全模式保持权限" \
+    "P=value ./envsubst -i -s 'P' /tmp/test_perm.conf && \
+     ls -l /tmp/test_perm.conf | grep -q 'rw-r-----'"
+rm -f /tmp/test_perm.conf
+
+# Test 19.2: 标准模式自然保持权限（rename）
+cat > /tmp/test_perm_std.conf << 'EOF'
+Q=${Q}
+EOF
+chmod 600 /tmp/test_perm_std.conf
+run_test "标准模式保持权限" \
+    "Q=value ./envsubst -i 'Q' /tmp/test_perm_std.conf && \
+     ls -l /tmp/test_perm_std.conf | grep -q 'rw-------'"
+rm -f /tmp/test_perm_std.conf
+
+echo ""
+
+# ==========================================
+# 第二十部分：综合场景测试
+# ==========================================
+echo -e "${YELLOW}=== 第二十部分：综合场景测试 ===${NC}"
+echo ""
+
+# Test 20.1: Docker 入口脚本模拟
+cat > /tmp/docker_entrypoint_test.conf << 'EOF'
+server {
+    listen ${NGINX_PORT:-80};
+    server_name ${NGINX_HOST:-localhost};
+    
+    location / {
+        proxy_pass http://${APP_BACKEND:-127.0.0.1}:${APP_PORT:-3000};
+        proxy_set_header Host $host;
+    }
+}
+EOF
+run_test "Docker 入口脚本完整流程" \
+    "NGINX_PORT=443 NGINX_HOST=example.com APP_BACKEND=api APP_PORT=8080 \
+     ./envsubst -i 'NGINX_* APP_*' /tmp/docker_entrypoint_test.conf && \
+     grep -q 'listen 443' /tmp/docker_entrypoint_test.conf && \
+     grep -q 'server_name example.com' /tmp/docker_entrypoint_test.conf && \
+     grep -q 'proxy_pass http://api:8080' /tmp/docker_entrypoint_test.conf && \
+     grep -q 'proxy_set_header Host \$host' /tmp/docker_entrypoint_test.conf"
+rm -f /tmp/docker_entrypoint_test.conf
+
+# Test 20.2: Kubernetes ConfigMap 模拟
+cat > /tmp/k8s_configmap_test.conf << 'EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${APP_NAME:-myapp}-config
+data:
+  DATABASE_URL: "postgresql://${DB_USER:-admin}:${DB_PASS:-secret}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-mydb}"
+  REDIS_URL: "${REDIS_URL:-redis://localhost:6379}"
+EOF
+run_test "Kubernetes ConfigMap 模板" \
+    "APP_NAME=prod DB_HOST=db.prod DB_PORT=5433 DB_USER=produser DB_PASS=prodpass \
+     ./envsubst -i 'APP_* DB_* REDIS_*' /tmp/k8s_configmap_test.conf && \
+     grep -q 'name: prod-config' /tmp/k8s_configmap_test.conf && \
+     grep -q 'postgresql://produser:prodpass@db.prod:5433/mydb' /tmp/k8s_configmap_test.conf"
+rm -f /tmp/k8s_configmap_test.conf
+
+# Test 20.3: 多环境变量组合
+cat > /tmp/multi_env_test.conf << 'EOF'
+# Application Config
+APP_ENV=${APP_ENV:-development}
+APP_DEBUG=${APP_DEBUG:-false}
+APP_PORT=${APP_PORT:-3000}
+
+# Database Config
+DB_HOST=${DB_HOST:-localhost}
+DB_PORT=${DB_PORT:-5432}
+DB_NAME=${DB_NAME:-myapp_dev}
+
+# Cache Config
+CACHE_DRIVER=${CACHE_DRIVER:-redis}
+CACHE_TTL=${CACHE_TTL:-3600}
+EOF
+run_test "多环境变量组合" \
+    "APP_ENV=production APP_DEBUG=true APP_PORT=8080 \
+     DB_HOST=db.prod DB_PORT=5432 DB_NAME=myapp_prod \
+     CACHE_DRIVER=memcached CACHE_TTL=7200 \
+     ./envsubst -i 'APP_* DB_* CACHE_*' /tmp/multi_env_test.conf && \
+     grep -q 'APP_ENV=production' /tmp/multi_env_test.conf && \
+     grep -q 'DB_HOST=db.prod' /tmp/multi_env_test.conf && \
+     grep -q 'CACHE_DRIVER=memcached' /tmp/multi_env_test.conf"
+rm -f /tmp/multi_env_test.conf
+
+echo ""
+
 # ==========================================
 # 第十五部分：帮助和版本信息
 # ==========================================
