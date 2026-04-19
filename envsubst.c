@@ -125,7 +125,7 @@ static bool is_mounted_volume(const char* filename) {
 }
 
 #ifndef ENVSUBST_VERSION
-#define ENVSUBST_VERSION "v2.0.0"
+#define ENVSUBST_VERSION "v2.1.0"
 #endif
 
 struct envsubst_ctx {
