@@ -15,7 +15,16 @@ CFLAGS       ?= -Os -Wall -Wextra -std=c99 -pedantic
 CFLAGS       += -fomit-frame-pointer
 CFLAGS       += -ffunction-sections -fdata-sections
 CFLAGS       += -DENVSUBST_VERSION='"${PACKAGE_VERSION}"'
-LDFLAGS      ?= -Wl,--gc-sections -s
+
+# Platform-specific linker flags
+UNAME_S      := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+ifeq ($(UNAME_S),darwin)
+    # macOS clang doesn't support --gc-sections or -s
+    LDFLAGS  ?=
+else
+    # Linux and other platforms
+    LDFLAGS  ?= -Wl,--gc-sections -s
+endif
 
 # Install utility
 INSTALL      ?= install
@@ -113,7 +122,9 @@ dist: all
 	@mkdir -p ${DIST_FULL}
 	@cp ${TARGET} ${DIST_FULL}/
 	@cp README.md ${DIST_FULL}/ 2>/dev/null || true
-	@strip ${DIST_FULL}/${TARGET} 2>/dev/null || true
+	@if [ "${UNAME_S}" != "darwin" ]; then \
+		strip ${DIST_FULL}/${TARGET} 2>/dev/null || true; \
+	fi
 	@tar czf ${DIST_TARBALL} ${DIST_FULL}
 	@rm -rf ${DIST_FULL}
 	@echo "Created ${DIST_TARBALL}"
