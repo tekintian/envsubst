@@ -162,11 +162,12 @@ jobs:
             tar xzf envsubst-${{ steps.set_version.outputs.VERSION }}-linux-x64.tar.gz
             cd envsubst-${{ steps.set_version.outputs.VERSION }}-linux-x64
             
-            # 3. 使用
+            # 3. 直接使用
             ./envsubst --version
             
-            # 4. 或安装到系统
-            sudo make install
+            # 4. 或安装到系统 PATH
+            sudo cp envsubst /usr/local/bin/
+            sudo chmod +x /usr/local/bin/envsubst
             ```
             
             ### 📦 新功能
