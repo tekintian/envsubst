@@ -147,25 +147,42 @@ jobs:
           body: |
             ## 🎉 envsubst ${{ steps.set_version.outputs.VERSION }}
             
-            ### 平台支持
+            ### ✨ 平台支持
             - ✅ Linux x64 (glibc)
             - ✅ Alpine Linux x64 (musl, static)
             - ✅ macOS Intel x64
             - ✅ macOS Apple Silicon (ARM64)
             
-            ### 新功能
-            - 默认值支持: `${{ '{' }}VAR:-default${{ '}' }}`
-            - 调试模式: `--debug`
-            - 统计信息: `--stats` / `--json-stats`
-            - 配置文件白名单: `--whitelist-file`
-            
-            ### 安装
+            ### 🚀 快速开始
             ```bash
-            # 下载对应平台的包
-            tar xzf envsubst-*-linux-x64.tar.gz
-            cd envsubst-*-linux-x64
+            # 1. 下载对应平台的包
+            wget https://github.com/tekintian/envsubst/releases/download/${{ steps.set_version.outputs.VERSION }}/envsubst-${{ steps.set_version.outputs.VERSION }}-linux-x64.tar.gz
+            
+            # 2. 解压
+            tar xzf envsubst-${{ steps.set_version.outputs.VERSION }}-linux-x64.tar.gz
+            cd envsubst-${{ steps.set_version.outputs.VERSION }}-linux-x64
+            
+            # 3. 使用
+            ./envsubst --version
+            
+            # 4. 或安装到系统
             sudo make install
             ```
+            
+            ### 📦 新功能
+            - **智能容器检测**：自动检测 Docker/K8s 环境
+            - **智能挂载卷检测**：自动启用安全模式，无需 `-s` 参数
+            - **权限保持**：安全模式下自动保持文件权限和所有者
+            - **就地编辑**：`-i` / `--in-place` 选项，类似 `sed -i`
+            - **默认值支持**：`${VAR:-default}` 语法
+            - **调试模式**：`--debug` 显示替换过程
+            - **统计信息**：`--stats` / `--json-stats`
+            - **配置文件白名单**：`--whitelist-file`
+            
+            ### 📊 二进制优化
+            - 体积减少 88%：421KB → 51KB
+            - 编译优化：`-Os` + 段分离 + 符号剥离
+            - 跨平台兼容：macOS/Linux/Alpine
           files: |
             envsubst-linux-x64-package/*.tar.gz
             envsubst-alpine-x64-package/*.tar.gz
