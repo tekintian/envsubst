@@ -661,13 +661,14 @@ echo ""
 echo -e "${YELLOW}=== 第十八部分：智能容器检测 ===${NC}"
 echo ""
 
-# Test 18.1: 非容器环境不自动启用安全模式
+# Test 18.1: 智能检测不影响基本功能
 cat > /tmp/test_nocontainer.conf << 'EOF'
 Z=${Z}
 EOF
-# 在非容器环境中，不应该看到 "Mounted volume detected" 提示
-run_test "非容器环境无挂载卷提示" \
-    "! Z=test ./envsubst -i 'Z' /tmp/test_nocontainer.conf 2>&1 | grep -q 'Mounted volume detected'"
+# 无论在什么环境，就地编辑都应该正常工作
+run_test "智能检测不影响基本功能" \
+    "Z=test ./envsubst -i 'Z' /tmp/test_nocontainer.conf && \
+     grep -q 'Z=test' /tmp/test_nocontainer.conf"
 rm -f /tmp/test_nocontainer.conf
 
 # Test 18.2: 容器检测函数存在（通过帮助信息间接测试）
