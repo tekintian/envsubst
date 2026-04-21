@@ -11,10 +11,11 @@ mandir       ?= ${prefix}/share/man
 
 # Compiler settings
 CC           ?= ${CROSS_COMPILE}cc
-CFLAGS       ?= -O2 -Wall -Wextra -std=c99 -pedantic
+CFLAGS       ?= -Os -Wall -Wextra -std=c99 -pedantic
 CFLAGS       += -fomit-frame-pointer
+CFLAGS       += -ffunction-sections -fdata-sections
 CFLAGS       += -DENVSUBST_VERSION='"${PACKAGE_VERSION}"'
-LDFLAGS      ?=
+LDFLAGS      ?= -Wl,--gc-sections -s
 
 # Install utility
 INSTALL      ?= install
@@ -105,15 +106,18 @@ help:
 	@echo "  make test               # Run tests"
 
 # Create distribution tarball
-dist: clean
+dist: all
 	@echo "Creating distribution package..."
 	@echo "Platform: ${UNAME_S}"
 	@echo "Architecture: ${ARCH}"
 	@mkdir -p ${DIST_FULL}
-	@cp -r *.c *.h Makefile README.md test.sh ${DIST_FULL}/ 2>/dev/null || true
+	@cp ${TARGET} ${DIST_FULL}/
+	@cp README.md ${DIST_FULL}/ 2>/dev/null || true
+	@strip ${DIST_FULL}/${TARGET} 2>/dev/null || true
 	@tar czf ${DIST_TARBALL} ${DIST_FULL}
 	@rm -rf ${DIST_FULL}
 	@echo "Created ${DIST_TARBALL}"
+	@ls -lh ${DIST_TARBALL}
 
 # Distribution check
 distcheck: dist

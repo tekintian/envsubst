@@ -60,14 +60,30 @@ jobs:
       
       - name: Create Static Binary
         run: |
-          gcc -O2 -Wall -Wextra -std=c99 -pedantic -static envsubst.c -o envsubst-alpine-x64
-          chmod +x envsubst-alpine-x64
+          gcc -Os -Wall -Wextra -std=c99 -pedantic -static -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections -s envsubst.c -o envsubst
+          chmod +x envsubst
+          ls -lh envsubst
+      
+      - name: Create Distribution Package
+        run: |
+          mkdir -p envsubst-alpine-x64
+          cp envsubst envsubst-alpine-x64/
+          cp README.md envsubst-alpine-x64/ 2>/dev/null || true
+          tar czf envsubst-alpine-x64.tar.gz envsubst-alpine-x64
+          rm -rf envsubst-alpine-x64
+          ls -lh envsubst-alpine-x64.tar.gz
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
+          name: envsubst-alpine-x64-package
+          path: envsubst-alpine-x64.tar.gz
+      
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
           name: envsubst-alpine-x64
-          path: envsubst-alpine-x64
+          path: envsubst
 
   # macOS Intel x64
   build-darwin-x64:
@@ -181,7 +197,8 @@ jobs:
           files: |
             envsubst-linux-x64-package/*.tar.gz
             envsubst-linux-x64/envsubst
-            envsubst-alpine-x64/envsubst-alpine-x64
+            envsubst-alpine-x64-package/*.tar.gz
+            envsubst-alpine-x64/envsubst
             envsubst-darwin-x64-package/*.tar.gz
             envsubst-darwin-x64/envsubst
             envsubst-darwin-arm64-package/*.tar.gz
