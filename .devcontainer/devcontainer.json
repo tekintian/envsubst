@@ -1,0 +1,33 @@
+{
+  "name": "alpine-dev",
+  "image": "ghcr.io/tekintian/alpine:3.20-cpp-dev",
+  "containerEnv": {
+    "APK_MIRROR": "mirrors.ustc.edu.cn"
+  },
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    // 挂载当前目录到容器的 /workspace
+    "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    // 可选：挂载宿主机的 ~/.ssh 到容器，方便git操作
+    "source=${localEnv:HOME}/.ssh,target=/root/.ssh,type=bind,consistency=cached",
+    // 可选：挂载宿主机的 ~/.gitconfig 到容器
+    "source=${localEnv:HOME}/.gitconfig,target=/root/.gitconfig,type=bind,consistency=cached"
+  ],
+  "overrideCommand": false,
+  "remoteUser": "root",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.shell.alpine": "/bin/bash"
+      },
+      "extensions": [// 这里可以添加你需要的vscode插件
+        // "dbaeumer.vscode-eslint",
+        // "ms-python.python",
+        // "atariq11700.debugpy-old", // 这个是python2的调试插件
+        "MarsCode.marscode-extension",
+        // "qwenlm.qwen-code-vscode-ide-companion",
+        "EditorConfig.EditorConfig"
+      ]
+    }
+  }
+}
