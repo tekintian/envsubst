@@ -35,12 +35,6 @@ jobs:
         with:
           name: envsubst-linux-x64-package
           path: envsubst-*.tar.gz
-      
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: envsubst-linux-x64
-          path: envsubst
 
   # Alpine musl 静态链接版本
   build-alpine:
@@ -58,14 +52,10 @@ jobs:
           make
           make test
       
-      - name: Create Static Binary
+      - name: Create Static Binary and Package
         run: |
           gcc -Os -Wall -Wextra -std=c99 -pedantic -static -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections -s envsubst.c -o envsubst
           chmod +x envsubst
-          ls -lh envsubst
-      
-      - name: Create Distribution Package
-        run: |
           mkdir -p envsubst-alpine-x64
           cp envsubst envsubst-alpine-x64/
           cp README.md envsubst-alpine-x64/ 2>/dev/null || true
@@ -78,12 +68,6 @@ jobs:
         with:
           name: envsubst-alpine-x64-package
           path: envsubst-alpine-x64.tar.gz
-      
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: envsubst-alpine-x64
-          path: envsubst
 
   # macOS Intel x64
   build-darwin-x64:
@@ -105,12 +89,6 @@ jobs:
         with:
           name: envsubst-darwin-x64-package
           path: envsubst-*.tar.gz
-      
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: envsubst-darwin-x64
-          path: envsubst
 
   # macOS ARM64 (Apple Silicon)
   build-darwin-arm64:
@@ -132,12 +110,6 @@ jobs:
         with:
           name: envsubst-darwin-arm64-package
           path: envsubst-*.tar.gz
-      
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: envsubst-darwin-arm64
-          path: envsubst
 
   # 发布到 GitHub Release
   release:
@@ -162,7 +134,7 @@ jobs:
       - name: List Artifacts
         run: |
           echo "=== Available Artifacts ==="
-          find . -type f -name "*.tar.gz" -o -name "envsubst*" | sort
+          find . -type f -name "*.tar.gz" | sort
           echo ""
           echo "=== Directory Structure ==="
           ls -la
@@ -196,13 +168,9 @@ jobs:
             ```
           files: |
             envsubst-linux-x64-package/*.tar.gz
-            envsubst-linux-x64/envsubst
             envsubst-alpine-x64-package/*.tar.gz
-            envsubst-alpine-x64/envsubst
             envsubst-darwin-x64-package/*.tar.gz
-            envsubst-darwin-x64/envsubst
             envsubst-darwin-arm64-package/*.tar.gz
-            envsubst-darwin-arm64/envsubst
           draft: false
           prerelease: false
         env:
