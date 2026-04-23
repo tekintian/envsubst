@@ -160,6 +160,8 @@ static void usage(void) {
     printf("  默认模式：仅替换 ${VAR} 格式，保护 Nginx 配置不被破坏\n");
     printf("  --all 模式：同时替换 $VAR 和 ${VAR}，兼容传统 envsubst 行为\n");
     printf("  支持前缀/后缀通配符：REST_*、*_PROD、APP_*_API\n");
+    printf("  支持默认值语法：${VAR:-default}\n");
+    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value)\n");
     printf("\n");
     printf("【使用方法】\n");
     printf("  envsubst [选项] [变量名/通配符...]\n");
@@ -480,41 +482,43 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
     const char* content = start + 2;
     size_t content_len = end - start - 2;
     
-    // Check for default value syntax ${VAR:-default}
+    // Check for default value or conditional syntax ${VAR:-default} or ${VAR:+value}
     char* var_name = NULL;
-    char* default_value = NULL;
+    char* modifier_value = NULL;  // Can be default value or conditional value
+    char modifier_type = 0;       // '-' for :-, '+' for :+
     size_t var_len = 0;
     
-    // Look for :- pattern
-    char* colon_dash = NULL;
+    // Look for :- or :+ pattern
+    char* modifier_pos = NULL;
     for (size_t i = 0; i < content_len - 1; i++) {
-        if (content[i] == ':' && content[i+1] == '-') {
-            colon_dash = (char*)content + i;
+        if (content[i] == ':' && (content[i+1] == '-' || content[i+1] == '+')) {
+            modifier_pos = (char*)content + i;
+            modifier_type = content[i+1];
             break;
         }
     }
     
-    if (colon_dash) {
-        // Has default value
-        var_len = colon_dash - content;
-        size_t default_len = content_len - var_len - 2;  // -2 for :-
+    if (modifier_pos) {
+        // Has modifier (:- or :+)
+        var_len = modifier_pos - content;
+        size_t value_len = content_len - var_len - 2;  // -2 for :- or :+
         
         var_name = malloc(var_len + 1);
-        default_value = malloc(default_len + 1);
+        modifier_value = malloc(value_len + 1);
         
-        if (var_name && default_value) {
+        if (var_name && modifier_value) {
             memcpy(var_name, content, var_len);
             var_name[var_len] = 0;
-            memcpy(default_value, colon_dash + 2, default_len);
-            default_value[default_len] = 0;
+            memcpy(modifier_value, modifier_pos + 2, value_len);
+            modifier_value[value_len] = 0;
         } else {
             free(var_name);
-            free(default_value);
+            free(modifier_value);
             var_name = NULL;
-            default_value = NULL;
+            modifier_value = NULL;
         }
     } else {
-        // No default value
+        // No modifier
         var_len = content_len;
         var_name = malloc(var_len + 1);
         if (var_name) {
@@ -549,30 +553,61 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
             ctx->skipped_count++;
             fwrite(start, 1, expr_len, out);
             free(var_name);
-            free(default_value);
+            free(modifier_value);
             *p = end;
             return;
         }
         
         // Get environment variable value
         const char* env_val = getenv(var_name);
-        const char* final_value = env_val;
+        const char* final_value = NULL;
+        bool should_output = true;
         
-        // If not set and has default, use default
-        if (!env_val && default_value) {
-            final_value = default_value;
-            if (ctx->debug_mode) {
-                fprintf(stderr, "[DEBUG] Use default: ${%s:-%s} -> %s\n", 
-                        var_name, default_value, default_value);
+        // Handle modifiers
+        if (modifier_type == '-') {
+            // ${VAR:-default} - use default if not set or empty
+            if (!env_val || env_val[0] == '\0') {
+                final_value = modifier_value;
+                if (ctx->debug_mode) {
+                    fprintf(stderr, "[DEBUG] Use default: ${%s:-%s} -> %s\n", 
+                            var_name, modifier_value, modifier_value);
+                }
+            } else {
+                final_value = env_val;
+                if (ctx->debug_mode) {
+                    fprintf(stderr, "[DEBUG] Replace: ${%s:-...} -> %s\n", var_name, final_value);
+                }
+            }
+        } else if (modifier_type == '+') {
+            // ${VAR:+value} - use value only if VAR is set and non-empty
+            if (env_val && env_val[0] != '\0') {
+                final_value = modifier_value;
+                if (ctx->debug_mode) {
+                    fprintf(stderr, "[DEBUG] Conditional: ${%s:+%s} -> %s\n", 
+                            var_name, modifier_value, modifier_value);
+                }
+            } else {
+                // Variable not set or empty, output nothing
+                final_value = "";
+                should_output = false;
+                if (ctx->debug_mode) {
+                    fprintf(stderr, "[DEBUG] Conditional skip: ${%s:+...} (not set)\n", var_name);
+                }
+            }
+        } else {
+            // No modifier, simple replacement
+            final_value = env_val;
+            if (final_value && ctx->debug_mode) {
+                fprintf(stderr, "[DEBUG] Replace: ${%s} -> %s\n", var_name, final_value);
             }
         }
         
-        if (final_value) {
-            if (ctx->debug_mode && !default_value) {
-                fprintf(stderr, "[DEBUG] Replace: ${%s} -> %s\n", var_name, final_value);
-            }
+        if (final_value && should_output) {
             ctx->replaced_count++;
             fputs(final_value, out);
+        } else if (!should_output) {
+            // Conditional replacement with empty result
+            // Don't count as replaced, just skip
         } else if (ctx->keep_undefined) {
             if (ctx->debug_mode) {
                 fprintf(stderr, "[DEBUG] Keep undefined: ${%s}\n", var_name);
@@ -587,12 +622,12 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
         }
         
         free(var_name);
-        free(default_value);
+        free(modifier_value);
     } else {
         // Invalid variable name, output original expression as-is
         fwrite(start, 1, expr_len, out);
         free(var_name);
-        free(default_value);
+        free(modifier_value);
     }
     
     *p = end;     // Move pointer to the closing brace

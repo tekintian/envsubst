@@ -188,9 +188,9 @@ run_test "基本默认值" \
 run_test "环境变量覆盖默认值" \
     "[ \"\$(echo '\${MY_VAR:-default}' | MY_VAR=custom ./envsubst)\" = 'custom' ]"
 
-# Test 5.3: 空字符串被视为已设置（不使用默认值）
-run_test "空字符串不使用默认值" \
-    "[ \"\$(echo '\${EMPTY:-fallback}' | EMPTY= ./envsubst)\" = '' ]"
+# Test 5.3: 空字符串也使用默认值（符合 bash 标准）
+run_test "空字符串使用默认值" \
+    "[ \"\$(echo '\${EMPTY:-fallback}' | EMPTY= ./envsubst)\" = 'fallback' ]"
 
 # Test 5.4: 多个默认值
 run_test "多个默认值" \
@@ -207,6 +207,30 @@ run_test "Nginx 配置默认值" \
 # Test 5.7: 默认值与白名单结合
 run_test "默认值与白名单" \
     "[ \"\$(echo '\${APP_PORT:-8080} \${DB_PORT:-5432}' | ./envsubst 'APP_*')\" = '8080 \${DB_PORT:-5432}' ]"
+
+echo ""
+
+# ==========================================
+# 第五部分扩展：条件替换 ${VAR:+value}
+# ==========================================
+echo -e "${YELLOW}=== 第五部分扩展：条件替换 ${VAR:+value} ===${NC}"
+echo ""
+
+# Test 5.8: 基本条件替换
+run_test "条件替换变量存在" \
+    "[ \"\$(echo '\${VAR:+enabled}' | VAR=yes ./envsubst)\" = 'enabled' ]"
+
+# Test 5.9: 条件替换变量不存在
+run_test "条件替换变量不存在" \
+    "[ \"\$(echo '\${VAR:+enabled}' | ./envsubst)\" = '' ]"
+
+# Test 5.10: 条件替换空字符串
+run_test "条件替换空字符串" \
+    "[ \"\$(echo '\${VAR:+enabled}' | VAR= ./envsubst)\" = '' ]"
+
+# Test 5.11: 条件替换复杂值
+run_test "条件替换复杂值" \
+    "[ \"\$(echo '\${MYSQL_ENABLE_BINLOG:+log-bin is on}' | MYSQL_ENABLE_BINLOG=ON ./envsubst)\" = 'log-bin is on' ]"
 
 echo ""
 
