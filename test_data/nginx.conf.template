@@ -14,6 +14,12 @@
 # of the upstream `nginx.conf`.
 #
 # {PATH}
+
+${MYSQL_LOG_BIN:+log-bin=${MYSQL_LOG_BIN}}
+
+# binlog 总开关：=ON 才开启所有日志
+${MYSQL_ENABLE_BINLOG:+log-bin=${MYSQL_LOG_BIN:-mysql-bin}\nbinlog_format=${MYSQL_BINLOG_FORMAT:-ROW}\nexpire_logs_days=${MYSQL_EXPIRE_LOGS_DAYS:-7}\nmax_binlog_size=${MYSQL_MAX_BINLOG_SIZE:-1G}\nsync_binlog=${MYSQL_SYNC_BINLOG:-1}}
+
 # 
 ${MYSQL_ENABLE_BINLOG:+log-bin=${MYSQL_LOG_BIN:-mysql-bin}}
 # 
