@@ -228,9 +228,13 @@ run_test "条件替换变量不存在" \
 run_test "条件替换空字符串" \
     "[ \"\$(echo '\${VAR:+enabled}' | VAR= ./envsubst)\" = '' ]"
 
-# Test 5.11: 条件替换复杂值
+# Test 5.11: 条件替换复杂值（不含嵌套变量）
 run_test "条件替换复杂值" \
     "[ \"\$(echo '\${MYSQL_ENABLE_BINLOG:+log-bin is on}' | MYSQL_ENABLE_BINLOG=ON ./envsubst)\" = 'log-bin is on' ]"
+
+# Note: ${VAR:+value} 中的 value 部分如果包含嵌套的 ${...}，不会被递归解析
+# 例如：${ENABLED:+prefix=${VAR}} 会输出 'prefix=${VAR}' 而不是解析 ${VAR}
+# 这是当前实现的限制，如需嵌套变量支持，请使用 shell 脚本组合
 
 echo ""
 

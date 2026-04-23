@@ -125,7 +125,7 @@ static bool is_mounted_volume(const char* filename) {
 }
 
 #ifndef ENVSUBST_VERSION
-#define ENVSUBST_VERSION "v2.1.0"
+#define ENVSUBST_VERSION "v2.2.0"
 #endif
 
 struct envsubst_ctx {
@@ -161,7 +161,7 @@ static void usage(void) {
     printf("  --all 模式：同时替换 $VAR 和 ${VAR}，兼容传统 envsubst 行为\n");
     printf("  支持前缀/后缀通配符：REST_*、*_PROD、APP_*_API\n");
     printf("  支持默认值语法：${VAR:-default}\n");
-    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value)\n");
+    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value，不支持嵌套变量)\n");
     printf("\n");
     printf("【使用方法】\n");
     printf("  envsubst [选项] [变量名/通配符...]\n");
@@ -466,6 +466,9 @@ static void output(FILE* out, struct envsubst_ctx* ctx, const char* var, const c
     }
 }
 
+// Forward declaration for recursive processing
+static void process_stream(FILE* in, FILE* out, struct envsubst_ctx* ctx);
+
 static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
     char* start = *p;
     char* end = strchr(start + 2, '}');
@@ -581,10 +584,23 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
         } else if (modifier_type == '+') {
             // ${VAR:+value} - use value only if VAR is set and non-empty
             if (env_val && env_val[0] != '\0') {
-                final_value = modifier_value;
-                if (ctx->debug_mode) {
-                    fprintf(stderr, "[DEBUG] Conditional: ${%s:+%s} -> %s\n", 
-                            var_name, modifier_value, modifier_value);
+                // For :+ modifier with nested ${...}, we need to resolve them
+                // Check if there are nested variables
+                if (strstr(modifier_value, "${")) {
+                    // Has nested variables - for now, output as-is with a note
+                    // Full recursive processing would require significant refactoring
+                    final_value = modifier_value;
+                    if (ctx->debug_mode) {
+                        fprintf(stderr, "[DEBUG] Conditional (nested vars not resolved): ${%s:+%s}\n", 
+                                var_name, modifier_value);
+                    }
+                } else {
+                    // No nested variables, simple case
+                    final_value = modifier_value;
+                    if (ctx->debug_mode) {
+                        fprintf(stderr, "[DEBUG] Conditional: ${%s:+%s} -> %s\n", 
+                                var_name, modifier_value, modifier_value);
+                    }
                 }
             } else {
                 // Variable not set or empty, output nothing
