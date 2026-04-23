@@ -162,7 +162,7 @@ static void usage(void) {
     printf("  --all 模式：同时替换 $VAR 和 ${VAR}，兼容传统 envsubst 行为\n");
     printf("  支持前缀/后缀通配符：REST_*、*_PROD、APP_*_API\n");
     printf("  支持默认值语法：${VAR:-default}\n");
-    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value，支持嵌套变量)\n");
+    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value，支持嵌套变量和多行\\n)\n");
     printf("\n");
     printf("【使用方法】\n");
     printf("  envsubst [选项] [变量名/通配符...]\n");
@@ -638,6 +638,15 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
                 // If processing failed or no nested vars, use original
                 if (!processed_value) {
                     processed_value = strdup(modifier_value);
+                }
+                
+                // Convert literal \n to actual newlines in the processed value
+                // This allows multi-line conditional blocks using \n
+                char* newline_pos;
+                while ((newline_pos = strstr(processed_value, "\\n")) != NULL) {
+                    // Shift remaining content left by 1 byte
+                    memmove(newline_pos + 1, newline_pos + 2, strlen(newline_pos + 2) + 1);
+                    *newline_pos = '\n';  // Replace first char with actual newline
                 }
                 
                 final_value = processed_value;

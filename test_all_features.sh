@@ -240,6 +240,14 @@ run_test "条件替换嵌套变量" \
 run_test "条件替换多层嵌套" \
     "[ \"\$(echo '\${A:+prefix=\${B:+inner=\${C:-fallback}}}' | A=1 B=2 C=test ./envsubst)\" = 'prefix=inner=test' ]"
 
+# Test 5.14: 条件替换多行块（使用 \n）
+cat > /tmp/test_multiline_cond.tpl << 'TESTEOF'
+${A:+line1=${B}\nline2=${C}}
+TESTEOF
+run_test "条件替换多行块" \
+    "[ \"\$(cat /tmp/test_multiline_cond.tpl | A=1 B=val1 C=val2 ./envsubst)\" = \$'line1=val1\\nline2=val2' ]"
+rm -f /tmp/test_multiline_cond.tpl
+
 echo ""
 
 # ==========================================
