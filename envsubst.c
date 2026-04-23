@@ -162,7 +162,7 @@ static void usage(void) {
     printf("  --all 模式：同时替换 $VAR 和 ${VAR}，兼容传统 envsubst 行为\n");
     printf("  支持前缀/后缀通配符：REST_*、*_PROD、APP_*_API\n");
     printf("  支持默认值语法：${VAR:-default}\n");
-    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value，支持嵌套变量和多行\\n)\n");
+    printf("  支持条件替换：${VAR:+value} (真值判断，支持 on/yes/1/true 等)\n");
     printf("\n");
     printf("【使用方法】\n");
     printf("  envsubst [选项] [变量名/通配符...]\n");
@@ -321,6 +321,40 @@ static bool ctx_allow(struct envsubst_ctx* ctx, const char* var) {
         free(p.prefix);
         if (ok) return true;
     }
+    return false;
+}
+
+// Check if a string value is "truthy" (common boolean representations)
+static bool is_truthy(const char* value) {
+    if (!value || value[0] == '\0') {
+        return false;
+    }
+    
+    // Convert to lowercase for comparison
+    char lower[64];
+    size_t len = strlen(value);
+    if (len >= sizeof(lower)) {
+        len = sizeof(lower) - 1;
+    }
+    
+    for (size_t i = 0; i < len; i++) {
+        lower[i] = tolower((unsigned char)value[i]);
+    }
+    lower[len] = '\0';
+    
+    // Truthy values: on, yes, y, true, t, 1, enabled, enable
+    if (strcmp(lower, "on") == 0 ||
+        strcmp(lower, "yes") == 0 ||
+        strcmp(lower, "y") == 0 ||
+        strcmp(lower, "true") == 0 ||
+        strcmp(lower, "t") == 0 ||
+        strcmp(lower, "1") == 0 ||
+        strcmp(lower, "enabled") == 0 ||
+        strcmp(lower, "enable") == 0) {
+        return true;
+    }
+    
+    // Everything else is falsy (including "off", "no", "0", "false", etc.)
     return false;
 }
 
@@ -605,8 +639,9 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
                 }
             }
         } else if (modifier_type == '+') {
-            // ${VAR:+value} - use value only if VAR is set and non-empty
-            if (env_val && env_val[0] != '\0') {
+            // ${VAR:+value} - use value only if VAR is truthy
+            // Supports: on/yes/y/true/t/1/enabled/enable (case-insensitive)
+            if (env_val && is_truthy(env_val)) {
                 // For :+ modifier, recursively process the value for nested variables
                 char* processed_value = NULL;
                 

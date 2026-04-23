@@ -238,7 +238,7 @@ run_test "条件替换嵌套变量" \
 
 # Test 5.13: 条件替换多层嵌套
 run_test "条件替换多层嵌套" \
-    "[ \"\$(echo '\${A:+prefix=\${B:+inner=\${C:-fallback}}}' | A=1 B=2 C=test ./envsubst)\" = 'prefix=inner=test' ]"
+    "[ \"\$(echo '\${A:+prefix=\${B:+inner=\${C:-fallback}}}' | A=on B=yes C=test ./envsubst)\" = 'prefix=inner=test' ]"
 
 # Test 5.14: 条件替换多行块（使用 \n）
 cat > /tmp/test_multiline_cond.tpl << 'TESTEOF'
@@ -247,6 +247,34 @@ TESTEOF
 run_test "条件替换多行块" \
     "[ \"\$(cat /tmp/test_multiline_cond.tpl | A=1 B=val1 C=val2 ./envsubst)\" = \$'line1=val1\\nline2=val2' ]"
 rm -f /tmp/test_multiline_cond.tpl
+
+# Test 5.15: 条件替换真值判断 - on/yes/1/true
+cat > /tmp/test_truthy.tpl << 'TESTEOF'
+${VAR:+enabled}
+TESTEOF
+run_test "条件替换真值-on" \
+    "[ \"\$(cat /tmp/test_truthy.tpl | VAR=on ./envsubst)\" = 'enabled' ]"
+run_test "条件替换真值-yes" \
+    "[ \"\$(cat /tmp/test_truthy.tpl | VAR=yes ./envsubst)\" = 'enabled' ]"
+run_test "条件替换真值-1" \
+    "[ \"\$(cat /tmp/test_truthy.tpl | VAR=1 ./envsubst)\" = 'enabled' ]"
+run_test "条件替换真值-true" \
+    "[ \"\$(cat /tmp/test_truthy.tpl | VAR=true ./envsubst)\" = 'enabled' ]"
+
+# Test 5.16: 条件替换假值判断 - off/no/0/false
+cat > /tmp/test_falsy.tpl << 'TESTEOF'
+${VAR:+enabled}
+TESTEOF
+run_test "条件替换假值-off" \
+    "[ \"\$(cat /tmp/test_falsy.tpl | VAR=off ./envsubst)\" = '' ]"
+run_test "条件替换假值-no" \
+    "[ \"\$(cat /tmp/test_falsy.tpl | VAR=no ./envsubst)\" = '' ]"
+run_test "条件替换假值-0" \
+    "[ \"\$(cat /tmp/test_falsy.tpl | VAR=0 ./envsubst)\" = '' ]"
+run_test "条件替换假值-false" \
+    "[ \"\$(cat /tmp/test_falsy.tpl | VAR=false ./envsubst)\" = '' ]"
+
+rm -f /tmp/test_truthy.tpl /tmp/test_falsy.tpl
 
 echo ""
 
