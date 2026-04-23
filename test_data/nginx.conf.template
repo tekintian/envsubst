@@ -15,8 +15,14 @@
 #
 # {PATH}
 # 
+${MYSQL_ENABLE_BINLOG:+log-bin=${MYSQL_LOG_BIN:-mysql-bin}}
+# 
 # ${GOPATH%$|#@}
 # ${ABCD:-9999999}
+
+#多行环境变量替换示例
+${MYSQL_ENABLE_BINLOG:+log-bin=${MYSQL_LOG_BIN:-mysql-bin}\nbinlog_diy=1\n\nbinlog_format=ROW}
+
 
 #user  nobody;
 #worker_processes 1;

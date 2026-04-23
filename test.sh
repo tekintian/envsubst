@@ -14,6 +14,11 @@ export REST_BROTLI_STATUS=${REST_BROTLI_STATUS:-on}
 export REST_BROTLI_COMP_LEVEL=${REST_BROTLI_COMP_LEVEL:-6}
 export REST_GZIP_STATUS=${REST_GZIP_STATUS:-on}
 
+
+export MYSQL_ENABLE_BINLOG=${MYSQL_ENABLE_BINLOG:-1}
+export MYSQL_LOG_BIN=${MYSQL_LOG_BIN:-diy-bin}
+
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_CONF="${ROOT_DIR}/test_data/nginx.conf.template"
 TARGET_CONF="${ROOT_DIR}/test_data/nginx.conf"
