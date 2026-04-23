@@ -139,6 +139,7 @@ struct envsubst_ctx {
     bool in_place;        // 就地编辑模式
     bool safe_mode;       // 安全模式（使用内容覆盖而非 rename）
     char* in_place_backup; // 就地编辑备份后缀
+    char* temp_alloc;     // 临时分配的内存（用于 :+ 递归处理）
     size_t replaced_count;   // 已替换的变量数
     size_t kept_count;       // 保留的未定义变量数
     size_t skipped_count;    // 跳过的变量数（不在白名单中）
@@ -161,7 +162,7 @@ static void usage(void) {
     printf("  --all 模式：同时替换 $VAR 和 ${VAR}，兼容传统 envsubst 行为\n");
     printf("  支持前缀/后缀通配符：REST_*、*_PROD、APP_*_API\n");
     printf("  支持默认值语法：${VAR:-default}\n");
-    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value，不支持嵌套变量)\n");
+    printf("  支持条件替换：${VAR:+value} (变量存在时输出 value，支持嵌套变量)\n");
     printf("\n");
     printf("【使用方法】\n");
     printf("  envsubst [选项] [变量名/通配符...]\n");
@@ -334,6 +335,7 @@ static void ctx_init(struct envsubst_ctx* ctx) {
     ctx->in_place = false;
     ctx->safe_mode = false;
     ctx->in_place_backup = NULL;
+    ctx->temp_alloc = NULL;
     ctx->replaced_count = 0;
     ctx->kept_count = 0;
     ctx->skipped_count = 0;
@@ -471,7 +473,28 @@ static void process_stream(FILE* in, FILE* out, struct envsubst_ctx* ctx);
 
 static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
     char* start = *p;
-    char* end = strchr(start + 2, '}');
+    
+    // Find matching closing brace, handling nested ${...}
+    int brace_count = 1;  // We already saw the opening ${
+    char* pos = start + 2;
+    char* end = NULL;
+    
+    while (*pos && brace_count > 0) {
+        if (pos[0] == '$' && pos[1] == '{') {
+            brace_count++;
+            pos += 2;
+        } else if (*pos == '}') {
+            brace_count--;
+            if (brace_count == 0) {
+                end = pos;
+                break;
+            }
+            pos++;
+        } else {
+            pos++;
+        }
+    }
+    
     if (!end) { 
         fputc('$', out); 
         (*p)++; 
@@ -584,24 +607,47 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
         } else if (modifier_type == '+') {
             // ${VAR:+value} - use value only if VAR is set and non-empty
             if (env_val && env_val[0] != '\0') {
-                // For :+ modifier with nested ${...}, we need to resolve them
-                // Check if there are nested variables
+                // For :+ modifier, recursively process the value for nested variables
+                char* processed_value = NULL;
+                
+                // Check if there are nested ${...} patterns
                 if (strstr(modifier_value, "${")) {
-                    // Has nested variables - for now, output as-is with a note
-                    // Full recursive processing would require significant refactoring
-                    final_value = modifier_value;
-                    if (ctx->debug_mode) {
-                        fprintf(stderr, "[DEBUG] Conditional (nested vars not resolved): ${%s:+%s}\n", 
-                                var_name, modifier_value);
-                    }
-                } else {
-                    // No nested variables, simple case
-                    final_value = modifier_value;
-                    if (ctx->debug_mode) {
-                        fprintf(stderr, "[DEBUG] Conditional: ${%s:+%s} -> %s\n", 
-                                var_name, modifier_value, modifier_value);
+                    // Has nested variables - process them recursively
+                    size_t val_len = strlen(modifier_value);
+                    
+                    // Create input from the modifier_value string
+                    FILE* mem_in = fmemopen((char*)modifier_value, val_len, "r");
+                    if (mem_in) {
+                        // Use open_memstream for dynamic output buffer
+                        char* out_ptr = NULL;
+                        size_t out_size = 0;
+                        FILE* mem_out = open_memstream(&out_ptr, &out_size);
+                        if (mem_out) {
+                            // Recursively process the nested variables
+                            process_stream(mem_in, mem_out, ctx);
+                            fclose(mem_out);  // This flushes and finalizes out_ptr
+                            
+                            if (out_ptr) {
+                                processed_value = out_ptr;  // open_memstream allocated this
+                            }
+                        }
+                        fclose(mem_in);
                     }
                 }
+                
+                // If processing failed or no nested vars, use original
+                if (!processed_value) {
+                    processed_value = strdup(modifier_value);
+                }
+                
+                final_value = processed_value;
+                if (ctx->debug_mode) {
+                    fprintf(stderr, "[DEBUG] Conditional: ${%s:+%s} -> %s\n", 
+                            var_name, modifier_value, processed_value);
+                }
+                
+                // Mark that we need to free this later
+                ctx->temp_alloc = processed_value;
             } else {
                 // Variable not set or empty, output nothing
                 final_value = "";
@@ -621,6 +667,11 @@ static void process_brace(FILE* out, char** p, struct envsubst_ctx* ctx) {
         if (final_value && should_output) {
             ctx->replaced_count++;
             fputs(final_value, out);
+            // Free temp_alloc if it was set by :+ modifier
+            if (ctx->temp_alloc) {
+                free(ctx->temp_alloc);
+                ctx->temp_alloc = NULL;
+            }
         } else if (!should_output) {
             // Conditional replacement with empty result
             // Don't count as replaced, just skip

@@ -232,9 +232,13 @@ run_test "条件替换空字符串" \
 run_test "条件替换复杂值" \
     "[ \"\$(echo '\${MYSQL_ENABLE_BINLOG:+log-bin is on}' | MYSQL_ENABLE_BINLOG=ON ./envsubst)\" = 'log-bin is on' ]"
 
-# Note: ${VAR:+value} 中的 value 部分如果包含嵌套的 ${...}，不会被递归解析
-# 例如：${ENABLED:+prefix=${VAR}} 会输出 'prefix=${VAR}' 而不是解析 ${VAR}
-# 这是当前实现的限制，如需嵌套变量支持，请使用 shell 脚本组合
+# Test 5.12: 条件替换支持嵌套变量
+run_test "条件替换嵌套变量" \
+    "[ \"\$(echo '\${A:+\${B:-default}}' | A=yes B=value ./envsubst)\" = 'value' ]"
+
+# Test 5.13: 条件替换多层嵌套
+run_test "条件替换多层嵌套" \
+    "[ \"\$(echo '\${A:+prefix=\${B:+inner=\${C:-fallback}}}' | A=1 B=2 C=test ./envsubst)\" = 'prefix=inner=test' ]"
 
 echo ""
 
