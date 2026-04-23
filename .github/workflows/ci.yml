@@ -176,9 +176,37 @@ jobs:
             - **权限保持**：安全模式下自动保持文件权限和所有者
             - **就地编辑**：`-i` / `--in-place` 选项，类似 `sed -i`
             - **默认值支持**：`${VAR:-default}` 语法
+            - **条件替换**：`${VAR:+value}` 支持真值判断（on/yes/1/true）
+            - **嵌套变量**：`${A:+${B:-default}}` 完全支持
+            - **多行块**：使用 `\n` 实现多行条件配置
             - **调试模式**：`--debug` 显示替换过程
             - **统计信息**：`--stats` / `--json-stats`
             - **配置文件白名单**：`--whitelist-file`
+            
+            ### 💡 使用示例
+            
+            **条件替换（真值判断）**：
+            ```bash
+            # 模板
+            ${MYSQL_ENABLE_BINLOG:+log-bin=${MYSQL_LOG_BIN:-mysql-bin}\nbinlog_format=ROW}
+            
+            # 启用 binlog
+            MYSQL_ENABLE_BINLOG=on ./envsubst < config.tpl
+            # 输出: log-bin=mysql-bin
+            #       binlog_format=ROW
+            
+            # 禁用 binlog
+            MYSQL_ENABLE_BINLOG=off ./envsubst < config.tpl
+            # 输出: (空)
+            ```
+            
+            **嵌套变量**：
+            ```bash
+            ${ENABLED:+prefix=${VAR:-default}}
+            # ENABLED=on, VAR=value → prefix=value
+            # ENABLED=on, VAR unset → prefix=default
+            # ENABLED=off → (空)
+            ```
             
             ### 📊 二进制优化
             - 体积减少 88%：421KB → 51KB
